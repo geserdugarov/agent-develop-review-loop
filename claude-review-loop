@@ -94,10 +94,10 @@ Review:
 ${review_content}"
   fi
 
-  claude -p "$claude_prompt" 2>&1 | tee "$log_file"
+  claude -p --dangerously-skip-permissions "$claude_prompt" </dev/null 2>&1 | tee "$log_file"
 
   echo "[loop] iteration $review_num: review"
-  codex exec "$REVIEW_PROMPT" >"$review_file" 2>&1 || true
+  codex exec -s read-only "$REVIEW_PROMPT" </dev/null >"$review_file" 2>&1 || true
 
   if tail -n 3 "$review_file" | grep -q '^REVIEW_PASSED$'; then
     review_passed=true
