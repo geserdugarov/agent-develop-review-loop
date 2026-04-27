@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat >&2 <<'EOF'
+Usage: claude-review-loop <task-file> [--max N]
+
+  <task-file>   Path to a markdown/plain-text file describing the task.
+                Contents are passed verbatim to Claude on iteration 0.
+  --max N       Iteration cap (default: 10).
+
+Project = $PWD (the target repo you cd into before running).
+Exit codes: 0 = review passed, 1 = max iterations hit without passing,
+            2 = usage / IO / preflight error.
+EOF
+  exit 2
+}
+
+TASK_FILE=""
+MAX=10
+
+while (( $# > 0 )); do
+  case "$1" in
+    --max)
+      [[ $# -ge 2 ]] || { echo "error: --max requires a value" >&2; usage; }
+      MAX="$2"; shift 2 ;;
+    --max=*)
+      MAX="${1#--max=}"; shift ;;
+    -h|--help)
+      usage ;;
+    --)
+      shift; break ;;
+    -*)
+      echo "error: unknown flag: $1" >&2; usage ;;
+    *)
+      if [[ -z "$TASK_FILE" ]]; then
+        TASK_FILE="$1"; shift
+      else
+        echo "error: unexpected positional argument: $1" >&2; usage
+      fi ;;
+  esac
+done
+
+[[ -n "$TASK_FILE" ]] || { echo "error: <task-file> required" >&2; usage; }
+[[ "$MAX" =~ ^[1-9][0-9]*$ ]] || { echo "error: --max must be a positive integer (got: $MAX)" >&2; exit 2; }
+
+[[ -r "$TASK_FILE" ]] || { echo "error: task file not readable: $TASK_FILE" >&2; exit 2; }
+command -v claude >/dev/null 2>&1 || { echo "error: 'claude' not on PATH" >&2; exit 2; }
+command -v codex  >/dev/null 2>&1 || { echo "error: 'codex' not on PATH"  >&2; exit 2; }
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+  || { echo "error: \$PWD is not inside a git work tree (the diff-based review depends on it)" >&2; exit 2; }
+
+ARTIFACTS=".claude-review-loop"
+mkdir -p "$ARTIFACTS"
+
+START_REF="$(git rev-parse HEAD)"
+START_TIME="$(date +%s)"
+TASK_CONTENT="$(cat "$TASK_FILE")"
+
+REVIEW_PROMPT="You are reviewing the cumulative changes in the current git work tree against the recorded start commit.
+
+1. Run 'git diff $START_REF' to see the full delta from the start of this loop (not just the latest fix).
+2. Evaluate the changes for correctness, edge cases, style, security, and regressions in unrelated code.
+3. Write your review in plain text. Be specific: cite filenames and line ranges where relevant.
+4. End your output with EXACTLY ONE of these two tokens on its own final line, with nothing after it:
+   - REVIEW_PASSED  (if the changes are acceptable as-is)
+   - REVIEW_FAILED  (if any issue should block acceptance)
+
+Do not write either token anywhere else in your review. The final line is the only signal."
+
+review_passed=false
+review_num=0
+final_review_file=""
+
+while [[ "$review_passed" == false && "$review_num" -lt "$MAX" ]]; do
+  log_file="$ARTIFACTS/claude-${review_num}.log"
+  review_file="$ARTIFACTS/review-${review_num}.md"
+
+  if (( review_num == 0 )); then
+    echo "[loop] iteration $review_num: implement"
+    claude_prompt="Implement the task below. Make code changes directly in the working tree of the current repo. Do not commit.
+
+Task:
+
+${TASK_CONTENT}"
+  else
+    prev_review="$ARTIFACTS/review-$((review_num - 1)).md"
+    echo "[loop] iteration $review_num: fix (from $prev_review)"
+    review_content="$(cat "$prev_review")"
+    claude_prompt="Codex reviewed your previous changes and flagged the issues below. Edit the code to address them. Do not revert unrelated work.
+
+Review:
+
+${review_content}"
+  fi
+
+  claude -p "$claude_prompt" 2>&1 | tee "$log_file"
+
+  echo "[loop] iteration $review_num: review"
+  codex exec "$REVIEW_PROMPT" >"$review_file" 2>&1 || true
+
+  if tail -n 3 "$review_file" | grep -q '^REVIEW_PASSED$'; then
+    review_passed=true
+  fi
+
+  final_review_file="$review_file"
+  review_num=$((review_num + 1))
+done
+
+END_TIME="$(date +%s)"
+DURATION=$(( END_TIME - START_TIME ))
+
+if $review_passed; then
+  verdict="PASSED"
+  exit_code=0
+else
+  verdict="FAILED"
+  exit_code=1
+fi
+
+cat >"$ARTIFACTS/summary.md" <<EOF
+# claude-review-loop summary
+
+- Task file: $TASK_FILE
+- Iterations used: $review_num / $MAX
+- Verdict: $verdict
+- Start ref: $START_REF
+- Duration: ${DURATION}s
+
+Final review file: $final_review_file
+Inspect cumulative changes: \`git diff $START_REF\`
+EOF
+
+echo "[loop] $verdict in $review_num iteration(s); summary at $ARTIFACTS/summary.md"
+exit $exit_code
