@@ -53,6 +53,14 @@ git rev-parse --is-inside-work-tree >/dev/null 2>&1 \
 ARTIFACTS=".claude-review-loop"
 mkdir -p "$ARTIFACTS"
 
+log_phase() { printf '[loop %s] %s\n' "$(date +%H:%M:%S)" "$*"; }
+fmt_elapsed() {
+  local s=$1
+  if (( s >= 60 )); then printf '%dm%02ds' "$((s/60))" "$((s%60))"
+  else printf '%ds' "$s"
+  fi
+}
+
 START_REF="$(git rev-parse HEAD)"
 START_TIME="$(date +%s)"
 TASK_CONTENT="$(cat "$TASK_FILE")"
@@ -77,7 +85,7 @@ while [[ "$review_passed" == false && "$review_num" -lt "$MAX" ]]; do
   review_file="$ARTIFACTS/review-${review_num}.md"
 
   if (( review_num == 0 )); then
-    echo "[loop] iteration $review_num: implement"
+    phase_label="implement"
     claude_prompt="Implement the task below. Make code changes directly in the working tree of the current repo. Do not commit.
 
 Task:
@@ -85,7 +93,7 @@ Task:
 ${TASK_CONTENT}"
   else
     prev_review="$ARTIFACTS/review-$((review_num - 1)).md"
-    echo "[loop] iteration $review_num: fix (from $prev_review)"
+    phase_label="fix (from $prev_review)"
     review_content="$(cat "$prev_review")"
     claude_prompt="Codex reviewed your previous changes and flagged the issues below. Edit the code to address them. Do not revert unrelated work.
 
@@ -94,13 +102,23 @@ Review:
 ${review_content}"
   fi
 
-  claude -p --dangerously-skip-permissions "$claude_prompt" </dev/null 2>&1 | tee "$log_file"
+  log_phase "iter $review_num $phase_label: start (tail -f $log_file or run claude-review-loop-watch for live progress)"
+  phase_start=$(date +%s)
+  claude -p --dangerously-skip-permissions \
+    --output-format stream-json --include-partial-messages --verbose \
+    "$claude_prompt" </dev/null >"$log_file" 2>&1
+  log_phase "iter $review_num $phase_label: done ($(fmt_elapsed $(($(date +%s) - phase_start))))"
 
-  echo "[loop] iteration $review_num: review"
+  log_phase "iter $review_num review: start"
+  phase_start=$(date +%s)
   codex exec -s read-only "$REVIEW_PROMPT" </dev/null >"$review_file" 2>&1 || true
+  log_phase "iter $review_num review: done ($(fmt_elapsed $(($(date +%s) - phase_start))))"
 
   if tail -n 3 "$review_file" | grep -q '^REVIEW_PASSED$'; then
     review_passed=true
+    log_phase "iter $review_num: REVIEW_PASSED"
+  else
+    log_phase "iter $review_num: REVIEW_FAILED"
   fi
 
   final_review_file="$review_file"
@@ -131,5 +149,5 @@ Final review file: $final_review_file
 Inspect cumulative changes: \`git diff $START_REF\`
 EOF
 
-echo "[loop] $verdict in $review_num iteration(s); summary at $ARTIFACTS/summary.md"
+log_phase "$verdict in $review_num iteration(s); summary at $ARTIFACTS/summary.md"
 exit $exit_code
