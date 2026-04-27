@@ -30,4 +30,15 @@ claude-review-loop ./task.md [--max N]
 - Project = `$PWD` (the repo you cd into). Artifacts land in `.claude-review-loop/`.
 - Exit codes: `0` review passed, `1` cap hit without passing, `2` usage / preflight error.
 
+### Watching progress
+
+In another terminal in the same target repo:
+
+```bash
+claude-review-loop-watch              # 1s interval, 20 lines
+claude-review-loop-watch 2 40         # 2s interval, 40 lines
+```
+
+Tracks the newest file in `.claude-review-loop/` and re-tails it each tick, so the view follows the loop automatically as `claude-N.log` → `review-N.md` → `claude-(N+1).log`.
+
 See `plans/develop-review-loop.md` for the full design.
