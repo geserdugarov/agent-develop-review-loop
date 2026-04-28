@@ -104,9 +104,9 @@ ${review_content}"
 
   log_phase "iter $review_num $phase_label: start (tail -f $log_file or run claude-review-loop-watch for live progress)"
   phase_start=$(date +%s)
-  claude -p --dangerously-skip-permissions \
+  printf '%s' "$claude_prompt" | claude -p --dangerously-skip-permissions \
     --output-format stream-json --include-partial-messages --verbose \
-    "$claude_prompt" </dev/null >"$log_file" 2>&1
+    >"$log_file" 2>&1
   log_phase "iter $review_num $phase_label: done ($(fmt_elapsed $(($(date +%s) - phase_start))))"
 
   log_phase "iter $review_num review: start"
