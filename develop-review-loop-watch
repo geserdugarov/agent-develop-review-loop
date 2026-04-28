@@ -3,9 +3,9 @@ set -euo pipefail
 
 usage() {
   cat >&2 <<'EOF'
-Usage: claude-review-loop-watch [interval-seconds] [tail-lines]
+Usage: develop-review-loop-watch [interval-seconds] [tail-lines]
 
-Tracks the most recently modified file in $PWD/.claude-review-loop/ and
+Tracks the most recently modified file in $PWD/.develop-review-loop/ and
 re-tails it on every tick. As the loop advances (claude-N.log -> review-N.md
 -> claude-(N+1).log -> ...), the displayed file follows automatically.
 
@@ -24,6 +24,6 @@ LINES="${2:-20}"
 [[ "$LINES"    =~ ^[1-9][0-9]*$ ]] || { echo "error: tail-lines must be a positive integer (got: $LINES)" >&2; exit 2; }
 
 command -v watch >/dev/null 2>&1 || { echo "error: 'watch' not on PATH (install procps)" >&2; exit 2; }
-[[ -d .claude-review-loop ]] || { echo "error: .claude-review-loop/ not found in $PWD — run claude-review-loop first" >&2; exit 2; }
+[[ -d .develop-review-loop ]] || { echo "error: .develop-review-loop/ not found in $PWD — run develop-review-loop first" >&2; exit 2; }
 
-exec watch -n "$INTERVAL" 'f=$(ls -1t .claude-review-loop/claude-*.log .claude-review-loop/review-*.md 2>/dev/null | head -n1); printf "=== %s ===\n" "$f"; tail -n '"$LINES"' "$f" 2>/dev/null'
+exec watch -n "$INTERVAL" 'f=$(ls -1t .develop-review-loop/claude-*.log .develop-review-loop/review-*.md 2>/dev/null | head -n1); printf "=== %s ===\n" "$f"; tail -n '"$LINES"' "$f" 2>/dev/null'

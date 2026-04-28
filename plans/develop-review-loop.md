@@ -4,12 +4,12 @@
 
 You want to drive a "implement → review → fix" loop where Claude does the work and Codex acts as the reviewer, repeating until Codex is satisfied (or a hard cap is hit). Today this means manually copying review comments back into Claude after each round. The wrapper automates that handoff so you can kick off a task in any project and walk away.
 
-This is intentionally project-agnostic — the script is invocation-agnostic of which repo it edits; `$PWD` decides that. The script itself lives in **this** repository (`agent-develop-review-loop`) so its own change history is preserved under git here, rather than as a loose file in `~/bin`. One-time setup: add this repo's checkout directory to `$PATH` so `claude-review-loop` resolves from anywhere.
+This is intentionally project-agnostic — the script is invocation-agnostic of which repo it edits; `$PWD` decides that. The script itself lives in **this** repository (`agent-develop-review-loop`) so its own change history is preserved under git here, rather than as a loose file in `~/bin`. One-time setup: add this repo's checkout directory to `$PATH` so `develop-review-loop` resolves from anywhere.
 
 ## CLI
 
 ```
-claude-review-loop <task-file> [--max N]
+develop-review-loop <task-file> [--max N]
 ```
 
 - `<task-file>` — path to a markdown/plain-text file describing the task. The contents are passed verbatim to Claude on iteration 0. May be a relative path (resolved against `$PWD`, i.e. the target repo) or absolute.
@@ -41,7 +41,7 @@ Note the condition is `&&`, not `||` — your original `||` would loop forever o
 
 > Implement the task below. Make code changes directly in the working tree of the current repo. Do not commit. Task:\n\n<contents of task file>
 
-Run via `claude -p "<prompt>"` (print/non-interactive mode). Tee stdout+stderr to `.claude-review-loop/claude-0.log`.
+Run via `claude -p "<prompt>"` (print/non-interactive mode). Tee stdout+stderr to `.develop-review-loop/claude-0.log`.
 
 **Iteration N≥1 — fix.** Send Claude:
 
@@ -52,7 +52,7 @@ Same `claude -p` invocation; log to `claude-{N}.log`.
 **After each Claude run — review.** Capture the starting commit once at script start (`START_REF=$(git rev-parse HEAD)`), then on each iteration run:
 
 ```
-codex exec "<review prompt>" > .claude-review-loop/review-{N}.md 2>&1
+codex exec "<review prompt>" > .develop-review-loop/review-{N}.md 2>&1
 ```
 
 The review prompt instructs Codex to:
@@ -62,7 +62,7 @@ The review prompt instructs Codex to:
 
 **Pass detection.** `tail -n 3 review-{N}.md | grep -q '^REVIEW_PASSED$'` — anchored, on the last few lines only, so a mention of "REVIEW_PASSED" in prose elsewhere can't trigger a false pass. Anything else (including missing sentinel, or `REVIEW_FAILED`) is treated as failed.
 
-## Artifacts (written to `.claude-review-loop/` in cwd)
+## Artifacts (written to `.develop-review-loop/` in cwd)
 
 - `review-{N}.md` — full Codex output for iteration N (the source of truth fed back into Claude on N+1).
 - `claude-{N}.log` — tee'd stdout+stderr of the Claude run for iteration N, for post-mortem when something goes sideways.
@@ -73,11 +73,11 @@ The review prompt instructs Codex to:
   - Start ref (so you can `git diff $START_REF` after the run)
   - Wall-clock duration
 
-The script should `mkdir -p` this directory but not gitignore it automatically — the plan notes that you may want to add `.claude-review-loop/` to your global gitignore once.
+The script should `mkdir -p` this directory but not gitignore it automatically — the plan notes that you may want to add `.develop-review-loop/` to your global gitignore once.
 
 ## Files to create
 
-- `claude-review-loop` at the **root of this repo** — single bash script, `set -euo pipefail`, `chmod +x`. No file extension, so users invoke it as `claude-review-loop` (not `.sh`).
+- `develop-review-loop` at the **root of this repo** — single bash script, `set -euo pipefail`, `chmod +x`. No file extension, so users invoke it as `develop-review-loop` (not `.sh`).
 - Update this repo's `README.md` with a one-time setup snippet:
 
   ```bash
@@ -85,7 +85,7 @@ The script should `mkdir -p` this directory but not gitignore it automatically �
   export PATH="$HOME/git/agent-develop-review-loop:$PATH"
   ```
 
-  After sourcing, `claude-review-loop` resolves from inside any target repo. (If the user clones this repo elsewhere, they substitute the actual path.)
+  After sourcing, `develop-review-loop` resolves from inside any target repo. (If the user clones this repo elsewhere, they substitute the actual path.)
 
 No changes to any target/project repo at runtime. Nothing in `~/.claude/`. Nothing in `~/bin/`.
 
@@ -94,7 +94,7 @@ No changes to any target/project repo at runtime. Nothing in `~/.claude/`. Nothi
 Single bash file, roughly:
 
 1. **Arg parsing & preflight.** Validate `<task-file>` exists and is readable. Confirm `claude` and `codex` are on `PATH` (`command -v`). Confirm `$PWD` is inside a git work tree (`git rev-parse --is-inside-work-tree`); fail with a clear message if not — the diff-based review depends on it.
-2. **Setup.** `mkdir -p .claude-review-loop`. Capture `START_REF`, `START_TIME`, read task file into a variable.
+2. **Setup.** `mkdir -p .develop-review-loop`. Capture `START_REF`, `START_TIME`, read task file into a variable.
 3. **Loop.** As described above. Use `tee` for Claude logs; redirect Codex output straight to the review file.
 4. **Pass check.** Anchored `grep` on `tail -n 3` of the review file.
 5. **Summary + exit.** Write `summary.md`, exit `0` on pass / `1` on cap-without-pass.
@@ -105,11 +105,11 @@ No Python, no extra deps — bash + `git` + `claude` + `codex` is the entire sur
 
 End-to-end, in a throwaway repo:
 
-0. One-time: add `export PATH="$HOME/git/agent-develop-review-loop:$PATH"` to `~/.bashrc`, `source ~/.bashrc`, then `command -v claude-review-loop` should resolve to this repo's checkout.
+0. One-time: add `export PATH="$HOME/git/agent-develop-review-loop:$PATH"` to `~/.bashrc`, `source ~/.bashrc`, then `command -v develop-review-loop` should resolve to this repo's checkout.
 1. `mkdir /tmp/loop-test && cd /tmp/loop-test && git init && git commit --allow-empty -m init`
 2. Write a small task: `echo "Create hello.py that prints 'hello'" > task.md`
-3. Run: `claude-review-loop ./task.md --max 3`
-4. Confirm: `hello.py` exists with reasonable content under `/tmp/loop-test`; `.claude-review-loop/review-0.md` ends with `REVIEW_PASSED` or `REVIEW_FAILED`; `summary.md` records the verdict. Confirm nothing was written under `~/git/agent-develop-review-loop` — the script must only touch `$PWD`.
+3. Run: `develop-review-loop ./task.md --max 3`
+4. Confirm: `hello.py` exists with reasonable content under `/tmp/loop-test`; `.develop-review-loop/review-0.md` ends with `REVIEW_PASSED` or `REVIEW_FAILED`; `summary.md` records the verdict. Confirm nothing was written under `~/git/agent-develop-review-loop` — the script must only touch `$PWD`.
 5. Negative test — give an intentionally underspecified task to force at least one failed review, and check that iteration 1 receives the review file as context (visible in `claude-1.log`).
 6. Cap test — set `--max 1` on a task you expect to fail review, and confirm exit code `1` and a `FAILED` summary.
 7. Commit the script + README change in this repo so the change history is preserved here (the whole point of moving it out of `~/bin`).
