@@ -52,7 +52,7 @@ Same `claude -p` invocation; log to `claude-{N}.log`.
 **After each Claude run — review.** Capture the starting commit once at script start (`START_REF=$(git rev-parse HEAD)`), then on each iteration run:
 
 ```
-codex exec "<review prompt>" > .develop-review-loop/review-{N}.md 2>&1
+codex exec --json --output-last-message .develop-review-loop/review-{N}.md "<review prompt>" > .develop-review-loop/review-{N}.log 2>&1
 ```
 
 The review prompt instructs Codex to:
@@ -64,7 +64,8 @@ The review prompt instructs Codex to:
 
 ## Artifacts (written to `.develop-review-loop/` in cwd)
 
-- `review-{N}.md` — full Codex output for iteration N (the source of truth fed back into Claude on N+1).
+- `review-{N}.md` — final Codex review text for iteration N (the source of truth fed back into Claude on N+1).
+- `review-{N}.log` — JSONL stdout+stderr of the Codex review run for iteration N, for post-mortem and any usage/cost analysis supported by emitted Codex events.
 - `claude-{N}.log` — tee'd stdout+stderr of the Claude run for iteration N, for post-mortem when something goes sideways.
 - `summary.md` — written at the end:
   - Task file path
@@ -72,6 +73,7 @@ The review prompt instructs Codex to:
   - Final verdict (PASSED / FAILED)
   - Start ref (so you can `git diff $START_REF` after the run)
   - Wall-clock duration
+  - Final review file and review log paths
 
 The script should `mkdir -p` this directory but not gitignore it automatically — the plan notes that you may want to add `.develop-review-loop/` to your global gitignore once.
 
@@ -95,7 +97,7 @@ Single bash file, roughly:
 
 1. **Arg parsing & preflight.** Validate `<task-file>` exists and is readable. Confirm `claude` and `codex` are on `PATH` (`command -v`). Confirm `$PWD` is inside a git work tree (`git rev-parse --is-inside-work-tree`); fail with a clear message if not — the diff-based review depends on it.
 2. **Setup.** `mkdir -p .develop-review-loop`. Capture `START_REF`, `START_TIME`, read task file into a variable.
-3. **Loop.** As described above. Use `tee` for Claude logs; redirect Codex output straight to the review file.
+3. **Loop.** As described above. Redirect Claude output to its log; redirect Codex JSONL output to a review log while `--output-last-message` writes the final review file.
 4. **Pass check.** Anchored `grep` on `tail -n 3` of the review file.
 5. **Summary + exit.** Write `summary.md`, exit `0` on pass / `1` on cap-without-pass.
 

@@ -79,10 +79,12 @@ Do not write either token anywhere else in your review. The final line is the on
 review_passed=false
 review_num=0
 final_review_file=""
+final_review_log_file=""
 
 while [[ "$review_passed" == false && "$review_num" -lt "$MAX" ]]; do
   log_file="$ARTIFACTS/claude-${review_num}.log"
   review_file="$ARTIFACTS/review-${review_num}.md"
+  review_log_file="$ARTIFACTS/review-${review_num}.log"
 
   if (( review_num == 0 )); then
     phase_label="implement"
@@ -109,9 +111,17 @@ ${review_content}"
     >"$log_file" 2>&1
   log_phase "iter $review_num $phase_label: done ($(fmt_elapsed $(($(date +%s) - phase_start))))"
 
-  log_phase "iter $review_num review: start"
+  log_phase "iter $review_num review: start (tail -f $review_log_file or run develop-review-loop-watch for live progress)"
   phase_start=$(date +%s)
-  codex exec -s read-only "$REVIEW_PROMPT" </dev/null >"$review_file" 2>&1 || true
+  : >"$review_file"
+  codex exec -s read-only --json --output-last-message "$review_file" "$REVIEW_PROMPT" </dev/null >"$review_log_file" 2>&1 || true
+  if [[ ! -s "$review_file" ]]; then
+    cat >"$review_file" <<EOF
+Codex review did not produce a final review message. See $review_log_file for the raw review-stage log.
+
+REVIEW_FAILED
+EOF
+  fi
   log_phase "iter $review_num review: done ($(fmt_elapsed $(($(date +%s) - phase_start))))"
 
   if tail -n 3 "$review_file" | grep -q '^REVIEW_PASSED$'; then
@@ -122,6 +132,7 @@ ${review_content}"
   fi
 
   final_review_file="$review_file"
+  final_review_log_file="$review_log_file"
   review_num=$((review_num + 1))
 done
 
@@ -146,6 +157,7 @@ cat >"$ARTIFACTS/summary.md" <<EOF
 - Duration: ${DURATION}s
 
 Final review file: $final_review_file
+Final review log: $final_review_log_file
 Inspect cumulative changes: \`git diff $START_REF\`
 EOF
 

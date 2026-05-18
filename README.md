@@ -39,6 +39,13 @@ develop-review-loop-watch              # 1s interval, 20 lines
 develop-review-loop-watch 2 40         # 2s interval, 40 lines
 ```
 
-Tracks the newest file in `.develop-review-loop/` and re-tails it each tick, so the view follows the loop automatically as `claude-N.log` → `review-N.md` → `claude-(N+1).log`.
+Tracks the newest file in `.develop-review-loop/` and re-tails it each tick, so the view follows the loop automatically as `claude-N.log` → `review-N.log` → `review-N.md` → `claude-(N+1).log`.
+
+### Artifacts
+
+- `claude-N.log`: development-stage stdout/stderr for iteration `N`.
+- `review-N.log`: review-stage JSONL stdout/stderr for iteration `N`, including any usage events emitted by Codex.
+- `review-N.md`: final review text for iteration `N`, used as feedback for the next development pass.
+- `summary.md`: final verdict and loop metadata.
 
 See `plans/develop-review-loop.md` for the full design.
