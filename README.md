@@ -37,6 +37,7 @@ Optional runtime configuration is read from `./.env` in the target repo. Copy th
 - `DEV_AGENT`: development/fix-stage agent. Supported values: `claude`, `codex`. Defaults to `claude`.
 - `REVIEW_AGENT`: review-stage agent. Supported values: `claude`, `codex`. Defaults to `codex`.
 - `CODEX_BIN`: path to the Codex CLI. Defaults to `codex`.
+- `CODEX_MODEL`: optional model passed to `codex exec -m`. When unset, Codex uses its own default/configured model; the usage summary will still try to read that configured model from `$CODEX_HOME/config.toml` or `~/.codex/config.toml` if JSON logs omit it.
 - `CLAUDE_BIN`: path to the Claude CLI. Defaults to `claude`.
 - `DEVELOP_REVIEW_LOOP_KEEP_RUNS`: number of `.develop-review-loop/run-*` artifact directories to keep, including the current run. Defaults to `3`.
 
@@ -50,6 +51,9 @@ REVIEW_AGENT=codex
 
 # Path to the codex CLI. Override only if not on $PATH.
 CODEX_BIN=codex
+
+# Optional explicit Codex model. Leave empty to use Codex's own default/config.
+# CODEX_MODEL=gpt-5.5
 
 # Path to the claude CLI. Override only if not on $PATH.
 CLAUDE_BIN=claude
@@ -76,6 +80,6 @@ Each invocation writes to `.develop-review-loop/run-YYYYMMDD-HHMMSS-PID/`. The s
 - `phases.tsv`: per-stage timing metadata used by the summary.
 - `summary.md`: final verdict, loop metadata, and post-run usage/cost estimate tables for the development and review agents.
 
-Cost estimates are derived from JSON usage metadata when agent logs expose it. Reported CLI costs are preferred; otherwise the script applies known first-party API token rates as a best-effort estimate. Subscription plans, third-party providers, regional pricing, long-context modes, priority processing, and separate tool fees can differ.
+Cost estimates are derived from JSON usage metadata when agent logs expose it. Reported CLI costs are preferred; otherwise the script applies known first-party API token rates as a best-effort estimate. For Codex logs that omit the model name, the estimate falls back to `CODEX_MODEL` and then the configured Codex model in `$CODEX_HOME/config.toml` or `~/.codex/config.toml`. Subscription plans, third-party providers, regional pricing, long-context modes, priority processing, and separate tool fees can differ.
 
 See `plans/develop-review-loop.md` for the full design.

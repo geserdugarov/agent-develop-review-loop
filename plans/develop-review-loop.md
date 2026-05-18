@@ -80,9 +80,9 @@ The review prompt instructs the reviewer to:
   - Development-agent usage/cost estimates from `development-{N}.log`
   - Review-agent usage/cost estimates from `review-{N}.log`
 
-The usage section is appended after the verdict summary is written. It parses JSONL usage metadata with `jq` when available. Reported CLI costs such as Claude's `total_cost_usd` are preferred; otherwise known first-party API token rates are applied as best-effort estimates. When logs do not expose usage metadata, or a model has no built-in API rate, affected fields are written as `n/a`.
+The usage section is appended after the verdict summary is written. It parses JSONL usage metadata with `jq` when available. Reported CLI costs such as Claude's `total_cost_usd` are preferred; otherwise known first-party API token rates are applied as best-effort estimates. For Codex logs that omit the model name, the estimate falls back to `CODEX_MODEL` and then the configured Codex model in `$CODEX_HOME/config.toml` or `~/.codex/config.toml`. When logs do not expose usage metadata, or a model has no built-in API rate, affected fields are written as `n/a`.
 
-The script should `mkdir -p` `.develop-review-loop/`, create a fresh `run-*` subdirectory per invocation, update `.develop-review-loop/latest`, and prune older `run-*` directories after summary generation. The number of retained run directories is configured by `DEVELOP_REVIEW_LOOP_KEEP_RUNS` in `./.env` and defaults to `3`. `DEV_AGENT`, `REVIEW_AGENT`, `CODEX_BIN`, and `CLAUDE_BIN` are also read from `./.env`, with exported shell variables taking precedence. The plan notes that you may want to add `.develop-review-loop/` to your global gitignore once.
+The script should `mkdir -p` `.develop-review-loop/`, create a fresh `run-*` subdirectory per invocation, update `.develop-review-loop/latest`, and prune older `run-*` directories after summary generation. The number of retained run directories is configured by `DEVELOP_REVIEW_LOOP_KEEP_RUNS` in `./.env` and defaults to `3`. `DEV_AGENT`, `REVIEW_AGENT`, `CODEX_BIN`, `CODEX_MODEL`, and `CLAUDE_BIN` are also read from `./.env`, with exported shell variables taking precedence. The plan notes that you may want to add `.develop-review-loop/` to your global gitignore once.
 
 ## Files to create
 

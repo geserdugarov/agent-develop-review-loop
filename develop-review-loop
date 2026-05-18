@@ -73,6 +73,18 @@ read_config_value() {
   printf '%s' "${value:-$default_value}"
 }
 
+strip_wrapping_quotes() {
+  local value="$1"
+
+  if [[ "$value" =~ ^\"(.*)\"$ ]]; then
+    value="${BASH_REMATCH[1]}"
+  elif [[ "$value" =~ ^\'(.*)\'$ ]]; then
+    value="${BASH_REMATCH[1]}"
+  fi
+
+  printf '%s' "$value"
+}
+
 validate_agent() {
   local name="$1"
   local value="$2"
@@ -105,11 +117,38 @@ check_agent_bin() {
     || { echo "error: ${stage} agent '$agent' requires '$bin' but it is not executable/on PATH" >&2; exit 2; }
 }
 
+codex_config_model() {
+  local codex_home="${CODEX_HOME:-$HOME/.codex}"
+  local config_file="$codex_home/config.toml"
+  local line value
+
+  [[ -r "$config_file" ]] || return 1
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%%#*}"
+    line="$(trim_spaces "$line")"
+    [[ -z "$line" ]] && continue
+    [[ "${line:0:1}" == "[" ]] && break
+    [[ "$line" =~ ^model[[:space:]]*= ]] || continue
+
+    value="${line#*=}"
+    value="$(trim_spaces "$value")"
+    value="$(strip_wrapping_quotes "$value")"
+    [[ -n "$value" ]] || return 1
+
+    printf '%s' "$value"
+    return 0
+  done < "$config_file"
+
+  return 1
+}
+
 run_development_agent() {
   local agent="$1"
   local prompt="$2"
   local log_file="$3"
   local bin
+  local -a args
 
   bin="$(agent_bin "$agent")"
   case "$agent" in
@@ -119,7 +158,10 @@ run_development_agent() {
         >"$log_file" 2>&1
       ;;
     codex)
-      "$bin" exec -s workspace-write --json "$prompt" </dev/null >"$log_file" 2>&1
+      args=(exec -s workspace-write --json)
+      [[ -n "$CODEX_MODEL" ]] && args+=(-m "$CODEX_MODEL")
+      args+=("$prompt")
+      "$bin" "${args[@]}" </dev/null >"$log_file" 2>&1
       ;;
   esac
 }
@@ -130,6 +172,7 @@ run_review_agent() {
   local review_file="$3"
   local review_log_file="$4"
   local bin
+  local -a args
 
   bin="$(agent_bin "$agent")"
   : >"$review_file"
@@ -151,7 +194,10 @@ run_review_agent() {
       fi
       ;;
     codex)
-      "$bin" exec -s read-only --json --output-last-message "$review_file" "$prompt" </dev/null >"$review_log_file" 2>&1 || true
+      args=(exec -s read-only --json --output-last-message "$review_file")
+      [[ -n "$CODEX_MODEL" ]] && args+=(-m "$CODEX_MODEL")
+      args+=("$prompt")
+      "$bin" "${args[@]}" </dev/null >"$review_log_file" 2>&1 || true
       ;;
   esac
 }
@@ -391,15 +437,19 @@ claude_log_metrics() {
 
 codex_log_metrics() {
   local log_file="$1"
+  local fallback_model="${2:-}"
 
   if ! command -v jq >/dev/null 2>&1; then
     printf '|missing-jq|||||||missing-jq\n'
     return 0
   fi
 
-  jq -Rsr '
+  jq -Rsr --arg fallback_model "$fallback_model" '
     def num($value):
       ($value // 0) | if type == "number" then . else (tonumber? // 0) end;
+
+    def known_model($value):
+      $value | select(type == "string" and . != "" and . != "unknown");
 
     def openai_rates($model):
       ($model | ascii_downcase) as $m
@@ -417,8 +467,26 @@ codex_log_metrics() {
           {input: 2.50, cached: 0.25, output: 15}
         elif ($m | startswith("gpt-5.3-codex")) then
           {input: 1.75, cached: 0.175, output: 14}
+        elif ($m | startswith("gpt-5.3")) then
+          {input: 1.75, cached: 0.175, output: 14}
         elif ($m | startswith("gpt-5.2")) then
           {input: 1.75, cached: 0.175, output: 14}
+        elif ($m | startswith("gpt-5.1-codex-mini")) then
+          {input: 0.25, cached: 0.025, output: 2}
+        elif ($m | startswith("gpt-5.1-codex")) then
+          {input: 1.25, cached: 0.125, output: 10}
+        elif ($m | startswith("gpt-5.1")) then
+          {input: 1.25, cached: 0.125, output: 10}
+        elif ($m | startswith("gpt-5-mini")) then
+          {input: 0.25, cached: 0.025, output: 2}
+        elif ($m | startswith("gpt-5-nano")) then
+          {input: 0.05, cached: 0.005, output: 0.40}
+        elif ($m | startswith("gpt-5-codex")) then
+          {input: 1.25, cached: 0.125, output: 10}
+        elif ($m | startswith("gpt-5")) then
+          {input: 1.25, cached: 0.125, output: 10}
+        elif ($m | startswith("codex-mini-latest")) then
+          {input: 1.50, cached: 0.375, output: 6}
         else null
         end;
 
@@ -428,8 +496,13 @@ codex_log_metrics() {
         $event.response.model?,
         $event.item.model?,
         $event.event.model?,
+        $event.payload.model?,
+        $event.payload.settings.model?,
+        $event.payload.collaboration_mode.settings.model?,
+        $event.info.model?,
+        $event.payload.info.model?,
         $usage.model?
-      ] | map(select(. != null and . != "")) | first // "unknown";
+      ] | map(known_model(.)) | first // "unknown";
 
     def usage_object($event):
       $event.usage?
@@ -437,6 +510,11 @@ codex_log_metrics() {
       // $event.total_token_usage?
       // $event.info.total_token_usage?
       // $event.info.usage?
+      // $event.payload.usage?
+      // $event.payload.token_usage?
+      // $event.payload.total_token_usage?
+      // $event.payload.info.total_token_usage?
+      // $event.payload.info.usage?
       // empty;
 
     def usage_record($usage):
@@ -464,7 +542,12 @@ codex_log_metrics() {
         | select((.usage.input + .usage.cached + .usage.output) > 0)
       ] as $usage_events
     | ($usage_events | last) as $last_usage
-    | ($last_usage.model // ([ $events[] | .. | objects | .model? | select(type == "string" and . != "") ] | last) // "unknown") as $model
+    | (
+        known_model($last_usage.model)
+        // ([ $events[] | .. | objects | known_model(.model?) ] | last)
+        // known_model($fallback_model)
+        // "unknown"
+      ) as $model
     | (($last_usage.usage // {input: 0, cached: 0, output: 0})) as $usage
     | (openai_rates($model)) as $rates
     | ([ $events[] | .. | objects | .total_cost_usd? | tonumber? ] | last) as $reported_cost
@@ -499,7 +582,7 @@ agent_log_metrics() {
 
   case "$agent" in
     claude) claude_log_metrics "$log_file" ;;
-    codex) codex_log_metrics "$log_file" ;;
+    codex) codex_log_metrics "$log_file" "${CODEX_METRICS_MODEL:-}" ;;
     *) printf '|unsupported-agent|||||||unsupported-agent\n' ;;
   esac
 }
@@ -734,14 +817,20 @@ CONFIG_FILE=".env"
 DEV_AGENT="$(read_config_value "DEV_AGENT" "$DEFAULT_DEV_AGENT")"
 REVIEW_AGENT="$(read_config_value "REVIEW_AGENT" "$DEFAULT_REVIEW_AGENT")"
 CODEX_BIN="$(read_config_value "CODEX_BIN" "codex")"
+CODEX_MODEL="$(read_config_value "CODEX_MODEL" "")"
 CLAUDE_BIN="$(read_config_value "CLAUDE_BIN" "claude")"
 KEEP_RUNS="$(read_config_value "DEVELOP_REVIEW_LOOP_KEEP_RUNS" "$DEFAULT_KEEP_RUNS")"
 
 DEV_AGENT="$(trim_spaces "${DEV_AGENT,,}")"
 REVIEW_AGENT="$(trim_spaces "${REVIEW_AGENT,,}")"
 CODEX_BIN="$(trim_spaces "$CODEX_BIN")"
+CODEX_MODEL="$(trim_spaces "$CODEX_MODEL")"
 CLAUDE_BIN="$(trim_spaces "$CLAUDE_BIN")"
 KEEP_RUNS="$(trim_spaces "$KEEP_RUNS")"
+CODEX_METRICS_MODEL="$CODEX_MODEL"
+if [[ -z "$CODEX_METRICS_MODEL" ]]; then
+  CODEX_METRICS_MODEL="$(codex_config_model || true)"
+fi
 
 validate_agent "DEV_AGENT" "$DEV_AGENT"
 validate_agent "REVIEW_AGENT" "$REVIEW_AGENT"
