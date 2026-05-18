@@ -69,6 +69,7 @@ The review prompt instructs the reviewer to:
 - `review-{N}.md` — final review text for iteration N (the source of truth fed back into the development agent on N+1).
 - `review-{N}.log` — stdout+stderr of the review run for iteration N, for post-mortem and any usage/cost analysis supported by the selected agent.
 - `development-{N}.log` — stdout+stderr of the development run for iteration N, for post-mortem when something goes sideways.
+- `phases.tsv` — one row per development/review phase with stage, iteration, agent, log path, and elapsed seconds.
 - `summary.md` — written at the end:
   - Task file path
   - Iterations used / max
@@ -76,6 +77,10 @@ The review prompt instructs the reviewer to:
   - Start ref (so you can `git diff $START_REF` after the run)
   - Wall-clock duration
   - Final review file and review log paths
+  - Development-agent usage/cost estimates from `development-{N}.log`
+  - Review-agent usage/cost estimates from `review-{N}.log`
+
+The usage section is appended after the verdict summary is written. It parses JSONL usage metadata with `jq` when available. Reported CLI costs such as Claude's `total_cost_usd` are preferred; otherwise known first-party API token rates are applied as best-effort estimates. When logs do not expose usage metadata, or a model has no built-in API rate, affected fields are written as `n/a`.
 
 The script should `mkdir -p` `.develop-review-loop/`, create a fresh `run-*` subdirectory per invocation, update `.develop-review-loop/latest`, and prune older `run-*` directories after summary generation. The number of retained run directories is configured by `DEVELOP_REVIEW_LOOP_KEEP_RUNS` in `./.env` and defaults to `3`. `DEV_AGENT`, `REVIEW_AGENT`, `CODEX_BIN`, and `CLAUDE_BIN` are also read from `./.env`, with exported shell variables taking precedence. The plan notes that you may want to add `.develop-review-loop/` to your global gitignore once.
 
@@ -101,9 +106,9 @@ Single bash file, roughly:
 2. **Setup.** `mkdir -p .develop-review-loop`. Capture `START_REF`, `START_TIME`, read task file into a variable.
 3. **Loop.** As described above. Redirect development-agent output to its log; redirect review-agent output to a review log while writing the final review file.
 4. **Pass check.** Anchored `grep` on `tail -n 3` of the review file.
-5. **Summary + exit.** Write `summary.md`, exit `0` on pass / `1` on cap-without-pass.
+5. **Summary + usage estimates + exit.** Write the base `summary.md`, append development/review usage and cost estimate tables from the captured logs, then exit `0` on pass / `1` on cap-without-pass.
 
-No Python, no extra deps — bash + `git` + the selected agent CLIs are the entire surface.
+No Python. The required surface is bash + `git` + the selected agent CLIs; `jq` is optional and enables structured Claude review capture plus usage/cost parsing.
 
 ## Verification
 
@@ -113,7 +118,7 @@ End-to-end, in a throwaway repo:
 1. `mkdir /tmp/loop-test && cd /tmp/loop-test && git init && git commit --allow-empty -m init`
 2. Write a small task: `echo "Create hello.py that prints 'hello'" > task.md`
 3. Run: `develop-review-loop ./task.md --max 3`
-4. Confirm: `hello.py` exists with reasonable content under `/tmp/loop-test`; `.develop-review-loop/latest/review-0.md` ends with `REVIEW_PASSED` or `REVIEW_FAILED`; `.develop-review-loop/latest/summary.md` records the verdict. Confirm nothing was written under `~/git/agent-develop-review-loop` — the script must only touch `$PWD`.
+4. Confirm: `hello.py` exists with reasonable content under `/tmp/loop-test`; `.develop-review-loop/latest/review-0.md` ends with `REVIEW_PASSED` or `REVIEW_FAILED`; `.develop-review-loop/latest/summary.md` records the verdict and usage/cost estimate sections; `.develop-review-loop/latest/phases.tsv` records development/review timings. Confirm nothing was written under `~/git/agent-develop-review-loop` — the script must only touch `$PWD`.
 5. Negative test — give an intentionally underspecified task to force at least one failed review, and check that iteration 1 receives the review file as context (visible in `development-1.log`).
 6. Cap test — set `--max 1` on a task you expect to fail review, and confirm exit code `1` and a `FAILED` summary.
 7. Commit the script + README change in this repo so the change history is preserved here (the whole point of moving it out of `~/bin`).

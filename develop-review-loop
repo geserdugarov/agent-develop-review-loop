@@ -136,16 +136,534 @@ run_review_agent() {
 
   case "$agent" in
     claude)
-      printf '%s' "$prompt" | "$bin" -p --dangerously-skip-permissions >"$review_file" 2>"$review_log_file" || true
-      {
-        printf '\n--- final review message ---\n'
-        cat "$review_file"
-      } >>"$review_log_file"
+      if command -v jq >/dev/null 2>&1; then
+        printf '%s' "$prompt" | "$bin" -p --dangerously-skip-permissions \
+          --output-format stream-json --include-partial-messages --verbose \
+          >"$review_log_file" 2>&1 || true
+        jq -Rsr '[split("\n")[] | fromjson? | select(.type == "result" and (.result? != null)) | .result] | last // ""' \
+          "$review_log_file" >"$review_file" 2>/dev/null || true
+      else
+        printf '%s' "$prompt" | "$bin" -p --dangerously-skip-permissions >"$review_file" 2>"$review_log_file" || true
+        {
+          printf '\n--- final review message ---\n'
+          cat "$review_file"
+        } >>"$review_log_file"
+      fi
       ;;
     codex)
       "$bin" exec -s read-only --json --output-last-message "$review_file" "$prompt" </dev/null >"$review_log_file" 2>&1 || true
       ;;
   esac
+}
+
+record_phase() {
+  local stage="$1"
+  local iteration="$2"
+  local agent="$3"
+  local log_file="$4"
+  local duration_seconds="$5"
+
+  printf '%s\t%s\t%s\t%s\t%s\n' "$stage" "$iteration" "$agent" "$log_file" "$duration_seconds" >>"$PHASES_TSV"
+}
+
+phase_duration_seconds() {
+  local stage="$1"
+  local iteration="$2"
+
+  awk -F '\t' -v stage="$stage" -v iteration="$iteration" '
+    NR > 1 && $1 == stage && $2 == iteration { print $5; found = 1; exit }
+    END { if (!found) print "" }
+  ' "$PHASES_TSV"
+}
+
+fmt_count() {
+  local value="${1:-}"
+
+  if [[ -z "$value" ]]; then
+    printf 'n/a'
+    return 0
+  fi
+
+  awk -v n="$value" '
+    function comma(value, text, out) {
+      text = sprintf("%.0f", value)
+      while (length(text) > 3) {
+        out = "," substr(text, length(text) - 2) out
+        text = substr(text, 1, length(text) - 3)
+      }
+      return text out
+    }
+    BEGIN { printf "%s", comma(n + 0) }
+  '
+}
+
+fmt_cost() {
+  local value="${1:-}"
+  local source="${2:-unavailable}"
+
+  if [[ -z "$value" ]]; then
+    printf 'n/a'
+    return 0
+  fi
+
+  awk -v value="$value" -v source="$source" '
+    BEGIN {
+      prefix = (source == "reported") ? "" : "≈ "
+      printf "%s$%.2f", prefix, value + 0
+    }
+  '
+}
+
+fmt_models() {
+  local value="${1:-}"
+
+  if [[ -z "$value" ]]; then
+    printf 'n/a'
+  else
+    printf '%s' "${value//,/, }"
+  fi
+}
+
+add_decimal() {
+  local left="${1:-0}"
+  local right="${2:-0}"
+
+  awk -v left="$left" -v right="$right" 'BEGIN { printf "%.10f", left + right }'
+}
+
+extract_iteration() {
+  local log_file="$1"
+  local prefix="$2"
+  local base
+
+  base="$(basename "$log_file")"
+  base="${base#"$prefix"-}"
+  printf '%s' "${base%.log}"
+}
+
+claude_log_metrics() {
+  local log_file="$1"
+
+  if ! command -v jq >/dev/null 2>&1; then
+    printf '|missing-jq|||||||missing-jq\n'
+    return 0
+  fi
+
+  jq -Rsr '
+    def num($value):
+      ($value // 0) | if type == "number" then . else (tonumber? // 0) end;
+
+    def claude_rates($model):
+      ($model | ascii_downcase) as $m
+      | if $m == "unknown" then null
+        elif ($m | test("opus.*4([._-]?[567]|\\.[567])")) then
+          {input: 5, cache_write_5m: 6.25, cache_write_1h: 10, cache_read: 0.50, output: 25}
+        elif ($m | test("opus.*4")) then
+          {input: 15, cache_write_5m: 18.75, cache_write_1h: 30, cache_read: 1.50, output: 75}
+        elif ($m | test("sonnet")) then
+          {input: 3, cache_write_5m: 3.75, cache_write_1h: 6, cache_read: 0.30, output: 15}
+        elif ($m | test("haiku.*3([._-]?5|\\.5)")) then
+          {input: 0.80, cache_write_5m: 1, cache_write_1h: 1.60, cache_read: 0.08, output: 4}
+        elif ($m | test("haiku")) then
+          {input: 1, cache_write_5m: 1.25, cache_write_1h: 2, cache_read: 0.10, output: 5}
+        else null
+        end;
+
+    def model_name($event):
+      [
+        $event.message.model?,
+        $event.event.message.model?,
+        $event.model?,
+        $event.response.model?
+      ] | map(select(. != null and . != "")) | first // "unknown";
+
+    def usage_record($usage):
+      {
+        input: num($usage.input_tokens // $usage.prompt_tokens),
+        cache_write_5m: (
+          if $usage.cache_creation_input_tokens? != null then
+            num($usage.cache_creation_input_tokens)
+          else
+            num($usage.cache_creation.ephemeral_5m_input_tokens // $usage.ephemeral_5m_input_tokens)
+          end
+        ),
+        cache_write_1h: (
+          if $usage.cache_creation_input_tokens? != null then
+            0
+          else
+            num($usage.cache_creation.ephemeral_1h_input_tokens // $usage.ephemeral_1h_input_tokens)
+          end
+        ),
+        cache_read: num($usage.cache_read_input_tokens // $usage.cached_input_tokens // $usage.cache_read_tokens),
+        output: num($usage.output_tokens // $usage.completion_tokens)
+      };
+
+    def cost_for_model($model):
+      (claude_rates($model.model)) as $rates
+      | if $rates == null then null
+        else (
+          (
+            ($model.input * $rates.input) +
+            ($model.cache_write_5m * $rates.cache_write_5m) +
+            ($model.cache_write_1h * $rates.cache_write_1h) +
+            ($model.cache_read * $rates.cache_read) +
+            ($model.output * $rates.output)
+          ) / 1000000
+        )
+        end;
+
+    [split("\n")[] | fromjson?] as $events
+    | [
+        range(0; $events | length) as $index
+        | $events[$index] as $event
+        | select($event.type? == "assistant" and ($event.message.usage? != null))
+        | {
+            index: $index,
+            id: ($event.message.id // $event.request_id // ($index | tostring)),
+            model: model_name($event),
+            usage: usage_record($event.message.usage)
+          }
+      ] as $assistant_usages
+    | [
+        $assistant_usages
+        | group_by(.id)
+        | .[]
+        | max_by(.index)
+      ] as $assistant_records
+    | [
+        range(0; $events | length) as $index
+        | $events[$index] as $event
+        | select($event.type? == "result" and ($event.usage? != null))
+        | {
+            index: $index,
+            id: ($event.session_id // ($index | tostring)),
+            model: model_name($event),
+            usage: usage_record($event.usage)
+          }
+      ] as $result_records
+    | (if ($assistant_records | length) > 0 then $assistant_records else $result_records end) as $records
+    | [
+        $records[]
+        | {
+            model,
+            input: .usage.input,
+            cache_write_5m: .usage.cache_write_5m,
+            cache_write_1h: .usage.cache_write_1h,
+            cache_read: .usage.cache_read,
+            output: .usage.output
+          }
+      ]
+      | group_by(.model)
+      | map({
+          model: .[0].model,
+          input: (map(.input) | add // 0),
+          cache_write_5m: (map(.cache_write_5m) | add // 0),
+          cache_write_1h: (map(.cache_write_1h) | add // 0),
+          cache_read: (map(.cache_read) | add // 0),
+          output: (map(.output) | add // 0)
+        }) as $models
+    | (reduce $models[] as $model (
+        {input: 0, cache_write: 0, cache_read: 0, output: 0};
+        .input += $model.input
+        | .cache_write += ($model.cache_write_5m + $model.cache_write_1h)
+        | .cache_read += $model.cache_read
+        | .output += $model.output
+      )) as $totals
+    | ([ $events[] | select(.type? == "result") | .total_cost_usd? | tonumber? ] | last) as $reported_cost
+    | ([ $models[] | cost_for_model(.) ] | map(select(. != null))) as $estimated_costs
+    | (if ($models | length) > 0 and ($estimated_costs | length) == ($models | length) then ($estimated_costs | add // 0) else null end) as $estimated_cost
+    | (if $reported_cost != null then $reported_cost elif $estimated_cost != null then $estimated_cost else null end) as $cost
+    | (if $reported_cost != null then "reported" elif $estimated_cost != null then "estimated" elif ($records | length) == 0 then "no-usage" else "unknown-price" end) as $source
+    | (([ $events[] | select(.type? == "result") | .num_turns? | numbers ] | last) // ($records | length)) as $turns
+    | [
+        ($cost // ""),
+        $source,
+        ($turns // ""),
+        $totals.input,
+        $totals.cache_write,
+        $totals.cache_read,
+        $totals.output,
+        ($models | map(.model) | unique | join(",")),
+        $source
+      ] | map(tostring) | join("|")
+  ' "$log_file" 2>/dev/null || printf '|parse-error|||||||parse-error\n'
+}
+
+codex_log_metrics() {
+  local log_file="$1"
+
+  if ! command -v jq >/dev/null 2>&1; then
+    printf '|missing-jq|||||||missing-jq\n'
+    return 0
+  fi
+
+  jq -Rsr '
+    def num($value):
+      ($value // 0) | if type == "number" then . else (tonumber? // 0) end;
+
+    def openai_rates($model):
+      ($model | ascii_downcase) as $m
+      | if ($m | startswith("gpt-5.5-pro")) then
+          {input: 30, cached: null, output: 180}
+        elif ($m | startswith("gpt-5.5")) then
+          {input: 5, cached: 0.50, output: 30}
+        elif ($m | startswith("gpt-5.4-pro")) then
+          {input: 30, cached: null, output: 180}
+        elif ($m | startswith("gpt-5.4-mini")) then
+          {input: 0.75, cached: 0.075, output: 4.50}
+        elif ($m | startswith("gpt-5.4-nano")) then
+          {input: 0.20, cached: 0.02, output: 1.25}
+        elif ($m | startswith("gpt-5.4")) then
+          {input: 2.50, cached: 0.25, output: 15}
+        elif ($m | startswith("gpt-5.3-codex")) then
+          {input: 1.75, cached: 0.175, output: 14}
+        elif ($m | startswith("gpt-5.2")) then
+          {input: 1.75, cached: 0.175, output: 14}
+        else null
+        end;
+
+    def model_name($event; $usage):
+      [
+        $event.model?,
+        $event.response.model?,
+        $event.item.model?,
+        $event.event.model?,
+        $usage.model?
+      ] | map(select(. != null and . != "")) | first // "unknown";
+
+    def usage_object($event):
+      $event.usage?
+      // $event.token_usage?
+      // $event.total_token_usage?
+      // $event.info.total_token_usage?
+      // $event.info.usage?
+      // empty;
+
+    def usage_record($usage):
+      {
+        input: num($usage.input_tokens // $usage.prompt_tokens // $usage.total_input_tokens),
+        cached: num(
+          $usage.cached_input_tokens
+          // $usage.cached_tokens
+          // $usage.input_tokens_details.cached_tokens
+          // $usage.prompt_tokens_details.cached_tokens
+        ),
+        output: num($usage.output_tokens // $usage.completion_tokens // $usage.total_output_tokens)
+      };
+
+    [split("\n")[] | fromjson?] as $events
+    | [
+        range(0; $events | length) as $index
+        | $events[$index] as $event
+        | usage_object($event) as $usage
+        | {
+            index: $index,
+            model: model_name($event; $usage),
+            usage: usage_record($usage)
+          }
+        | select((.usage.input + .usage.cached + .usage.output) > 0)
+      ] as $usage_events
+    | ($usage_events | last) as $last_usage
+    | ($last_usage.model // ([ $events[] | .. | objects | .model? | select(type == "string" and . != "") ] | last) // "unknown") as $model
+    | (($last_usage.usage // {input: 0, cached: 0, output: 0})) as $usage
+    | (openai_rates($model)) as $rates
+    | ([ $events[] | .. | objects | .total_cost_usd? | tonumber? ] | last) as $reported_cost
+    | (
+        if $rates != null and ($rates.cached != null or $usage.cached == 0) and (($usage.input + $usage.output) > 0) then
+          ((([$usage.input - $usage.cached, 0] | max) * $rates.input) + ($usage.cached * ($rates.cached // $rates.input)) + ($usage.output * $rates.output)) / 1000000
+        else null
+        end
+      ) as $estimated_cost
+    | (if $reported_cost != null then $reported_cost elif $estimated_cost != null then $estimated_cost else null end) as $cost
+    | (if $reported_cost != null then "reported" elif $estimated_cost != null then "estimated" elif ($usage_events | length) == 0 then "no-usage" else "unknown-price" end) as $source
+    | (([ $events[] | .. | objects | .num_turns? | numbers ] | last)
+       // ([ $events[] | .type? | tostring | select(test("turn[_ -]?complete|turncomplete"; "i")) ] | length)
+       // "") as $turns
+    | [
+        ($cost // ""),
+        $source,
+        $turns,
+        $usage.input,
+        "",
+        $usage.cached,
+        $usage.output,
+        $model,
+        $source
+      ] | map(tostring) | join("|")
+  ' "$log_file" 2>/dev/null || printf '|parse-error|||||||parse-error\n'
+}
+
+agent_log_metrics() {
+  local agent="$1"
+  local log_file="$2"
+
+  case "$agent" in
+    claude) claude_log_metrics "$log_file" ;;
+    codex) codex_log_metrics "$log_file" ;;
+    *) printf '|unsupported-agent|||||||unsupported-agent\n' ;;
+  esac
+}
+
+append_stage_usage_summary() {
+  local summary_file="$1"
+  local artifacts="$2"
+  local stage="$3"
+  local agent="$4"
+  local prefix="$5"
+  local title="$6"
+  local -a logs sorted_logs
+  local log_file base iteration duration metrics
+  local cost cost_source turns input cache_write cache_read output models status
+  local row_count=0
+  local cost_count=0
+  local usage_count=0
+  local total_cost=0
+  local total_duration=0
+  local total_turns=0
+  local total_input=0
+  local total_cache_write=0
+  local total_cache_read=0
+  local total_output=0
+  local notes=""
+
+  shopt -s nullglob
+  logs=("$artifacts"/"$prefix"-*.log)
+  shopt -u nullglob
+
+  if (( ${#logs[@]} > 0 )); then
+    while IFS= read -r log_file; do
+      sorted_logs+=("$log_file")
+    done < <(printf '%s\n' "${logs[@]}" | sort -V)
+  fi
+
+  {
+    printf '### %s (`%s`)\n\n' "$title" "$agent"
+
+    if (( ${#sorted_logs[@]} == 0 )); then
+      printf 'No `%s-*.log` files were found.\n\n' "$prefix"
+      return 0
+    fi
+
+    if [[ "$agent" == "claude" ]]; then
+      printf '| Log | Cost | Duration | Turns | Input | Cache write | Cache read | Output | Models |\n'
+      printf '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n'
+    else
+      printf '| Log | Cost | Duration | Turns | Input | Cached input | Output | Models |\n'
+      printf '| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n'
+    fi
+  } >>"$summary_file"
+
+  for log_file in "${sorted_logs[@]}"; do
+    row_count=$((row_count + 1))
+    base="$(basename "$log_file")"
+    iteration="$(extract_iteration "$log_file" "$prefix")"
+    duration="$(phase_duration_seconds "$stage" "$iteration")"
+    metrics="$(agent_log_metrics "$agent" "$log_file")"
+
+    IFS='|' read -r cost cost_source turns input cache_write cache_read output models status <<<"$metrics"
+
+    if [[ "$status" == "no-usage" || "$status" == "missing-jq" || "$status" == "parse-error" ]]; then
+      turns=""
+      input=""
+      cache_write=""
+      cache_read=""
+      output=""
+      models=""
+    fi
+
+    [[ -n "$duration" ]] && total_duration=$((total_duration + duration))
+    [[ -n "$turns" ]] && total_turns=$((total_turns + turns))
+    [[ -n "$input" ]] && total_input=$((total_input + input))
+    [[ -n "$cache_write" ]] && total_cache_write=$((total_cache_write + cache_write))
+    [[ -n "$cache_read" ]] && total_cache_read=$((total_cache_read + cache_read))
+    [[ -n "$output" ]] && total_output=$((total_output + output))
+
+    if [[ -n "$cost" ]]; then
+      cost_count=$((cost_count + 1))
+      total_cost="$(add_decimal "$total_cost" "$cost")"
+    fi
+
+    if [[ -n "$turns$input$cache_write$cache_read$output" ]]; then
+      usage_count=$((usage_count + 1))
+    fi
+
+    case "$status" in
+      missing-jq) notes="${notes} jq" ;;
+      no-usage) notes="${notes} no-usage" ;;
+      unknown-price) notes="${notes} unknown-price" ;;
+      parse-error) notes="${notes} parse-error" ;;
+    esac
+
+    if [[ "$agent" == "claude" ]]; then
+      printf '| `%s` | %s | %s | %s | %s | %s | %s | %s | %s |\n' \
+        "${base%.log}" \
+        "$(fmt_cost "$cost" "$cost_source")" \
+        "$(fmt_elapsed "${duration:-0}")" \
+        "$(fmt_count "$turns")" \
+        "$(fmt_count "$input")" \
+        "$(fmt_count "$cache_write")" \
+        "$(fmt_count "$cache_read")" \
+        "$(fmt_count "$output")" \
+        "$(fmt_models "$models")" >>"$summary_file"
+    else
+      printf '| `%s` | %s | %s | %s | %s | %s | %s | %s |\n' \
+        "${base%.log}" \
+        "$(fmt_cost "$cost" "$cost_source")" \
+        "$(fmt_elapsed "${duration:-0}")" \
+        "$(fmt_count "$turns")" \
+        "$(fmt_count "$input")" \
+        "$(fmt_count "$cache_read")" \
+        "$(fmt_count "$output")" \
+        "$(fmt_models "$models")" >>"$summary_file"
+    fi
+  done
+
+  {
+    if [[ "$agent" == "claude" ]]; then
+      printf '| **Total** | %s | %s | %s | %s | %s | %s | %s |  |\n' \
+        "$(if (( cost_count > 0 )); then fmt_cost "$total_cost" estimated; else printf 'n/a'; fi)" \
+        "$(fmt_elapsed "$total_duration")" \
+        "$(if (( usage_count > 0 )); then fmt_count "$total_turns"; else printf 'n/a'; fi)" \
+        "$(if (( usage_count > 0 )); then fmt_count "$total_input"; else printf 'n/a'; fi)" \
+        "$(if (( usage_count > 0 )); then fmt_count "$total_cache_write"; else printf 'n/a'; fi)" \
+        "$(if (( usage_count > 0 )); then fmt_count "$total_cache_read"; else printf 'n/a'; fi)" \
+        "$(if (( usage_count > 0 )); then fmt_count "$total_output"; else printf 'n/a'; fi)"
+    else
+      printf '| **Total** | %s | %s | %s | %s | %s | %s |  |\n' \
+        "$(if (( cost_count > 0 )); then fmt_cost "$total_cost" estimated; else printf 'n/a'; fi)" \
+        "$(fmt_elapsed "$total_duration")" \
+        "$(if (( usage_count > 0 )); then fmt_count "$total_turns"; else printf 'n/a'; fi)" \
+        "$(if (( usage_count > 0 )); then fmt_count "$total_input"; else printf 'n/a'; fi)" \
+        "$(if (( usage_count > 0 )); then fmt_count "$total_cache_read"; else printf 'n/a'; fi)" \
+        "$(if (( usage_count > 0 )); then fmt_count "$total_output"; else printf 'n/a'; fi)"
+    fi
+
+    if [[ "$notes" == *"jq"* ]]; then
+      printf '\nUsage metadata was not parsed because `jq` is not available.\n'
+    elif [[ "$notes" == *"parse-error"* ]]; then
+      printf '\nSome usage metadata could not be parsed from the JSONL logs.\n'
+    elif [[ "$notes" == *"no-usage"* ]]; then
+      printf '\nSome logs did not expose usage metadata, so their token and cost fields are `n/a`.\n'
+    elif [[ "$notes" == *"unknown-price"* ]]; then
+      printf '\nSome costs are `n/a` because the log model has no built-in API rate.\n'
+    fi
+
+    printf '\n'
+  } >>"$summary_file"
+}
+
+append_usage_summary() {
+  local summary_file="$1"
+  local artifacts="$2"
+
+  {
+    printf '\n## Usage and Cost Estimates\n\n'
+    printf 'Generated after the verdict from `%s`, `%s`, and `%s`. Costs use JSON usage metadata when available. Reported CLI costs are preferred; otherwise known first-party API token rates are applied as best-effort estimates. Subscription plans, third-party providers, regional pricing, long-context modes, priority processing, and separate tool fees can differ.\n\n' \
+      "$(basename "$PHASES_TSV")" 'development-*.log' 'review-*.log'
+  } >>"$summary_file"
+
+  append_stage_usage_summary "$summary_file" "$artifacts" "development" "$DEV_AGENT" "development" "Development Agent Usage"
+  append_stage_usage_summary "$summary_file" "$artifacts" "review" "$REVIEW_AGENT" "review" "Review Agent Usage"
 }
 
 cleanup_old_runs() {
@@ -235,9 +753,11 @@ check_agent_bin "review" "$REVIEW_AGENT"
 ARTIFACTS_ROOT=".develop-review-loop"
 RUN_ID="run-$(date +%Y%m%d-%H%M%S)-$$"
 ARTIFACTS="$ARTIFACTS_ROOT/$RUN_ID"
+PHASES_TSV="$ARTIFACTS/phases.tsv"
 mkdir -p "$ARTIFACTS_ROOT"
 mkdir "$ARTIFACTS"
 ln -sfn "$RUN_ID" "$ARTIFACTS_ROOT/latest" 2>/dev/null || true
+printf 'stage\titeration\tagent\tlog\tduration_seconds\n' >"$PHASES_TSV"
 
 log_phase() { printf '[loop %s] %s\n' "$(date +%H:%M:%S)" "$*"; }
 fmt_elapsed() {
@@ -294,7 +814,9 @@ ${review_content}"
   log_phase "iter $review_num $phase_label: start (tail -f $log_file or run develop-review-loop-watch for live progress)"
   phase_start=$(date +%s)
   run_development_agent "$DEV_AGENT" "$development_prompt" "$log_file"
-  log_phase "iter $review_num $phase_label: done ($(fmt_elapsed $(($(date +%s) - phase_start))))"
+  phase_duration=$(($(date +%s) - phase_start))
+  record_phase "development" "$review_num" "$DEV_AGENT" "$log_file" "$phase_duration"
+  log_phase "iter $review_num $phase_label: done ($(fmt_elapsed "$phase_duration"))"
 
   log_phase "iter $review_num review: start (tail -f $review_log_file or run develop-review-loop-watch for live progress)"
   phase_start=$(date +%s)
@@ -306,7 +828,9 @@ Review agent '$REVIEW_AGENT' did not produce a final review message. See $review
 REVIEW_FAILED
 EOF
   fi
-  log_phase "iter $review_num review: done ($(fmt_elapsed $(($(date +%s) - phase_start))))"
+  phase_duration=$(($(date +%s) - phase_start))
+  record_phase "review" "$review_num" "$REVIEW_AGENT" "$review_log_file" "$phase_duration"
+  log_phase "iter $review_num review: done ($(fmt_elapsed "$phase_duration"))"
 
   if tail -n 3 "$review_file" | grep -q '^REVIEW_PASSED$'; then
     review_passed=true
@@ -348,6 +872,13 @@ Final review file: $final_review_file
 Final review log: $final_review_log_file
 Inspect cumulative changes: \`git diff $START_REF\`
 EOF
+
+log_phase "usage summary: start"
+if append_usage_summary "$ARTIFACTS/summary.md" "$ARTIFACTS"; then
+  log_phase "usage summary: done"
+else
+  log_phase "usage summary: skipped (failed to parse usage metadata)"
+fi
 
 cleanup_old_runs "$ARTIFACTS_ROOT" "$KEEP_RUNS" "$ARTIFACTS"
 log_phase "$verdict in $review_num iteration(s); summary at $ARTIFACTS/summary.md"

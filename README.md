@@ -40,6 +40,8 @@ Optional runtime configuration is read from `./.env` in the target repo. Copy th
 - `CLAUDE_BIN`: path to the Claude CLI. Defaults to `claude`.
 - `DEVELOP_REVIEW_LOOP_KEEP_RUNS`: number of `.develop-review-loop/run-*` artifact directories to keep, including the current run. Defaults to `3`.
 
+`jq` is optional but recommended. When present, the loop can parse JSONL usage metadata for the final cost tables and can capture Claude review runs as structured logs. Without `jq`, the loop still runs, but unsupported usage fields are reported as `n/a`.
+
 Example:
 
 ```dotenv
@@ -71,6 +73,9 @@ Each invocation writes to `.develop-review-loop/run-YYYYMMDD-HHMMSS-PID/`. The s
 - `development-N.log`: development-stage stdout/stderr for iteration `N`.
 - `review-N.log`: review-stage stdout/stderr for iteration `N`. Codex review logs are JSONL and include any usage events emitted by Codex.
 - `review-N.md`: final review text for iteration `N`, used as feedback for the next development pass.
-- `summary.md`: final verdict and loop metadata.
+- `phases.tsv`: per-stage timing metadata used by the summary.
+- `summary.md`: final verdict, loop metadata, and post-run usage/cost estimate tables for the development and review agents.
+
+Cost estimates are derived from JSON usage metadata when agent logs expose it. Reported CLI costs are preferred; otherwise the script applies known first-party API token rates as a best-effort estimate. Subscription plans, third-party providers, regional pricing, long-context modes, priority processing, and separate tool fees can differ.
 
 See `plans/develop-review-loop.md` for the full design.
