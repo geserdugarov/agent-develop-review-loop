@@ -1,0 +1,10 @@
+# agents related
+.codex
+.codex-*
+.claude/
+.develop-review-loop/
+
+# sensitive data
+.env
+.env.local
+
