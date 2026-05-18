@@ -16,6 +16,76 @@ EOF
   exit 2
 }
 
+trim_spaces() {
+  local value="$1"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "$value"
+}
+
+read_env_value() {
+  local name="$1"
+  local file="$2"
+  local line value
+
+  [[ -f "$file" ]] || return 1
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%$'\r'}"
+    line="$(trim_spaces "$line")"
+    [[ -z "$line" || "${line:0:1}" == "#" ]] && continue
+
+    if [[ "$line" == export[[:space:]]* ]]; then
+      line="$(trim_spaces "${line#export}")"
+    fi
+
+    [[ "$line" == "$name="* ]] || continue
+
+    value="${line#*=}"
+    value="${value%%#*}"
+    value="$(trim_spaces "$value")"
+
+    if [[ "$value" =~ ^\"(.*)\"$ ]]; then
+      value="${BASH_REMATCH[1]}"
+    elif [[ "$value" =~ ^\'(.*)\'$ ]]; then
+      value="${BASH_REMATCH[1]}"
+    fi
+
+    printf '%s\n' "$value"
+    return 0
+  done < "$file"
+
+  return 1
+}
+
+cleanup_old_runs() {
+  local root="$1"
+  local keep="$2"
+  local current_run="$3"
+  local count=0
+  local dir
+  local -a run_dirs sorted_run_dirs
+
+  shopt -s nullglob
+  run_dirs=("$root"/run-*)
+  shopt -u nullglob
+
+  (( ${#run_dirs[@]} == 0 )) && return 0
+  while IFS= read -r dir; do
+    sorted_run_dirs+=("$dir")
+  done < <(printf '%s\n' "${run_dirs[@]}" | sort -r)
+
+  for dir in "${sorted_run_dirs[@]}"; do
+    [[ -d "$dir" && ! -L "$dir" ]] || continue
+    count=$((count + 1))
+    if (( count > keep )) && [[ "$dir" != "$current_run" ]]; then
+      rm -rf -- "$dir"
+    fi
+  done
+
+  return 0
+}
+
 TASK_FILE=""
 MAX=10
 
@@ -50,8 +120,24 @@ command -v codex  >/dev/null 2>&1 || { echo "error: 'codex' not on PATH"  >&2; e
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 \
   || { echo "error: \$PWD is not inside a git work tree (the diff-based review depends on it)" >&2; exit 2; }
 
-ARTIFACTS=".develop-review-loop"
-mkdir -p "$ARTIFACTS"
+DEFAULT_KEEP_RUNS=3
+CONFIG_FILE=".env"
+KEEP_RUNS="${DEVELOP_REVIEW_LOOP_KEEP_RUNS:-}"
+if [[ -z "$KEEP_RUNS" ]]; then
+  if dotenv_keep_runs="$(read_env_value "DEVELOP_REVIEW_LOOP_KEEP_RUNS" "$CONFIG_FILE")"; then
+    KEEP_RUNS="$dotenv_keep_runs"
+  fi
+fi
+KEEP_RUNS="${KEEP_RUNS:-$DEFAULT_KEEP_RUNS}"
+[[ "$KEEP_RUNS" =~ ^[1-9][0-9]*$ ]] \
+  || { echo "error: DEVELOP_REVIEW_LOOP_KEEP_RUNS must be a positive integer (got: $KEEP_RUNS)" >&2; exit 2; }
+
+ARTIFACTS_ROOT=".develop-review-loop"
+RUN_ID="run-$(date +%Y%m%d-%H%M%S)-$$"
+ARTIFACTS="$ARTIFACTS_ROOT/$RUN_ID"
+mkdir -p "$ARTIFACTS_ROOT"
+mkdir "$ARTIFACTS"
+ln -sfn "$RUN_ID" "$ARTIFACTS_ROOT/latest" 2>/dev/null || true
 
 log_phase() { printf '[loop %s] %s\n' "$(date +%H:%M:%S)" "$*"; }
 fmt_elapsed() {
@@ -155,11 +241,14 @@ cat >"$ARTIFACTS/summary.md" <<EOF
 - Verdict: $verdict
 - Start ref: $START_REF
 - Duration: ${DURATION}s
+- Run directory: $ARTIFACTS
+- Retained run directories: $KEEP_RUNS
 
 Final review file: $final_review_file
 Final review log: $final_review_log_file
 Inspect cumulative changes: \`git diff $START_REF\`
 EOF
 
+cleanup_old_runs "$ARTIFACTS_ROOT" "$KEEP_RUNS" "$ARTIFACTS"
 log_phase "$verdict in $review_num iteration(s); summary at $ARTIFACTS/summary.md"
 exit $exit_code

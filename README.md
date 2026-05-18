@@ -27,8 +27,14 @@ develop-review-loop ./task.md [--max N]
 
 - `<task-file>`: markdown / plain-text describing the task.
 - `--max N`: iteration cap (default `10`).
-- Project = `$PWD` (the repo you cd into). Artifacts land in `.develop-review-loop/`.
+- Project = `$PWD` (the repo you cd into). Artifacts land in a per-run subdirectory under `.develop-review-loop/`.
 - Exit codes: `0` review passed, `1` cap hit without passing, `2` usage / preflight error.
+
+### Configuration
+
+Optional runtime configuration is read from `./.env` in the target repo. Copy this repo's `.env.example` to the target repo as a starting point.
+
+- `DEVELOP_REVIEW_LOOP_KEEP_RUNS`: number of `.develop-review-loop/run-*` artifact directories to keep, including the current run. Defaults to `3`.
 
 ### Watching progress
 
@@ -39,9 +45,11 @@ develop-review-loop-watch              # 1s interval, 20 lines
 develop-review-loop-watch 2 40         # 2s interval, 40 lines
 ```
 
-Tracks the newest file in `.develop-review-loop/` and re-tails it each tick, so the view follows the loop automatically as `claude-N.log` → `review-N.log` → `review-N.md` → `claude-(N+1).log`.
+Tracks the newest file in `.develop-review-loop/latest` and re-tails it each tick, so the view follows the loop automatically as `claude-N.log` → `review-N.log` → `review-N.md` → `claude-(N+1).log`.
 
 ### Artifacts
+
+Each invocation writes to `.develop-review-loop/run-YYYYMMDD-HHMMSS-PID/`. The script also updates `.develop-review-loop/latest` to point at the newest run directory and prunes older `run-*` directories according to `DEVELOP_REVIEW_LOOP_KEEP_RUNS`.
 
 - `claude-N.log`: development-stage stdout/stderr for iteration `N`.
 - `review-N.log`: review-stage JSONL stdout/stderr for iteration `N`, including any usage events emitted by Codex.

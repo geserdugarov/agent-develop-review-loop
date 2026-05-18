@@ -41,7 +41,7 @@ Note the condition is `&&`, not `||` — your original `||` would loop forever o
 
 > Implement the task below. Make code changes directly in the working tree of the current repo. Do not commit. Task:\n\n<contents of task file>
 
-Run via `claude -p "<prompt>"` (print/non-interactive mode). Tee stdout+stderr to `.develop-review-loop/claude-0.log`.
+Run via `claude -p "<prompt>"` (print/non-interactive mode). Tee stdout+stderr to `.develop-review-loop/<run-id>/claude-0.log`.
 
 **Iteration N≥1 — fix.** Send Claude:
 
@@ -52,7 +52,7 @@ Same `claude -p` invocation; log to `claude-{N}.log`.
 **After each Claude run — review.** Capture the starting commit once at script start (`START_REF=$(git rev-parse HEAD)`), then on each iteration run:
 
 ```
-codex exec --json --output-last-message .develop-review-loop/review-{N}.md "<review prompt>" > .develop-review-loop/review-{N}.log 2>&1
+codex exec --json --output-last-message .develop-review-loop/<run-id>/review-{N}.md "<review prompt>" > .develop-review-loop/<run-id>/review-{N}.log 2>&1
 ```
 
 The review prompt instructs Codex to:
@@ -62,7 +62,7 @@ The review prompt instructs Codex to:
 
 **Pass detection.** `tail -n 3 review-{N}.md | grep -q '^REVIEW_PASSED$'` — anchored, on the last few lines only, so a mention of "REVIEW_PASSED" in prose elsewhere can't trigger a false pass. Anything else (including missing sentinel, or `REVIEW_FAILED`) is treated as failed.
 
-## Artifacts (written to `.develop-review-loop/` in cwd)
+## Artifacts (written to `.develop-review-loop/<run-id>/` in cwd)
 
 - `review-{N}.md` — final Codex review text for iteration N (the source of truth fed back into Claude on N+1).
 - `review-{N}.log` — JSONL stdout+stderr of the Codex review run for iteration N, for post-mortem and any usage/cost analysis supported by emitted Codex events.
@@ -75,7 +75,7 @@ The review prompt instructs Codex to:
   - Wall-clock duration
   - Final review file and review log paths
 
-The script should `mkdir -p` this directory but not gitignore it automatically — the plan notes that you may want to add `.develop-review-loop/` to your global gitignore once.
+The script should `mkdir -p` `.develop-review-loop/`, create a fresh `run-*` subdirectory per invocation, update `.develop-review-loop/latest`, and prune older `run-*` directories after summary generation. The number of retained run directories is configured by `DEVELOP_REVIEW_LOOP_KEEP_RUNS` in `./.env` and defaults to `3`. The plan notes that you may want to add `.develop-review-loop/` to your global gitignore once.
 
 ## Files to create
 
@@ -111,7 +111,7 @@ End-to-end, in a throwaway repo:
 1. `mkdir /tmp/loop-test && cd /tmp/loop-test && git init && git commit --allow-empty -m init`
 2. Write a small task: `echo "Create hello.py that prints 'hello'" > task.md`
 3. Run: `develop-review-loop ./task.md --max 3`
-4. Confirm: `hello.py` exists with reasonable content under `/tmp/loop-test`; `.develop-review-loop/review-0.md` ends with `REVIEW_PASSED` or `REVIEW_FAILED`; `summary.md` records the verdict. Confirm nothing was written under `~/git/agent-develop-review-loop` — the script must only touch `$PWD`.
+4. Confirm: `hello.py` exists with reasonable content under `/tmp/loop-test`; `.develop-review-loop/latest/review-0.md` ends with `REVIEW_PASSED` or `REVIEW_FAILED`; `.develop-review-loop/latest/summary.md` records the verdict. Confirm nothing was written under `~/git/agent-develop-review-loop` — the script must only touch `$PWD`.
 5. Negative test — give an intentionally underspecified task to force at least one failed review, and check that iteration 1 receives the review file as context (visible in `claude-1.log`).
 6. Cap test — set `--max 1` on a task you expect to fail review, and confirm exit code `1` and a `FAILED` summary.
 7. Commit the script + README change in this repo so the change history is preserved here (the whole point of moving it out of `~/bin`).
