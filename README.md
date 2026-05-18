@@ -42,7 +42,9 @@ Optional runtime configuration is read from `./.env` in the target repo. Copy th
 - `CLAUDE_BIN`: path to the Claude CLI. Defaults to `claude`.
 - `DEVELOP_REVIEW_LOOP_KEEP_RUNS`: number of `.develop-review-loop/run-*` artifact directories to keep, including the current run. Defaults to `3`.
 
-`jq` is optional but recommended. When present, the loop can parse JSONL usage metadata for the final cost tables and can capture Claude review runs as structured logs. Without `jq`, the loop still runs, but unsupported usage fields are reported as `n/a`.
+`jq` is a command-line JSON processor. It is optional but recommended. When present, the loop can parse JSONL usage metadata for the final cost tables and can capture Claude review runs as structured logs. Without `jq`, the loop still runs, but unsupported usage fields are reported as `n/a`.
+
+Install it with your system package manager, for example `sudo apt install jq` on Debian/Ubuntu or `brew install jq` on macOS.
 
 Example:
 
