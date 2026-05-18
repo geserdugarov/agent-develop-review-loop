@@ -47,6 +47,7 @@ checkout directory. The shell `PATH` entry can stay unchanged.
 
 ```bash
 develop-review-loop <task-file> [--max N] [--start-stage development|review]
+develop-review-loop --manual-rerun <run-dir> [--max N] [--rerun-from development-N|review-N]
 ```
 
 Arguments and options:
@@ -56,6 +57,12 @@ Arguments and options:
 - `--start-stage development|review`: stage to start from. Defaults to
   `development`.
 - `--start-review`, `--review-first`: aliases for `--start-stage review`.
+- `--manual-rerun <run-dir>`: resume an interrupted run in an existing
+  `.develop-review-loop/run-*` directory.
+- `--rerun-from development-N|review-N`: override the inferred resume point for
+  `--manual-rerun`.
+- `--start-ref <commit>`: override the original start commit for
+  `--manual-rerun` when it cannot be recovered from run metadata or review logs.
 
 Exit codes:
 
@@ -306,6 +313,8 @@ Generated files:
 | `review-N.log` | Review-stage stdout and stderr for iteration `N`. |
 | `review-N.md` | Final review text and sentinel for iteration `N`. Fed back into the next development stage when review fails. |
 | `phases.tsv` | Tab-separated timing metadata: stage, iteration, agent, log path, duration seconds. |
+| `task.md` | Saved task text for future reruns that need to replay `development-0`. |
+| `run.env` | Original start ref and run metadata used by manual reruns. |
 | `summary.md` | Final verdict, metadata, final review paths, and usage/cost estimate tables. |
 
 Retention cleanup happens after summary generation. The current run counts toward
@@ -360,11 +369,37 @@ Behavior:
 - If `review-0.md` fails, iteration `1` runs the normal fix stage using that
   review as feedback.
 
+## Manual Rerun Mode
+
+Use manual rerun mode after an agent-side interruption, such as a Claude usage
+limit, when the working tree should continue from the existing run artifacts:
+
+```bash
+develop-review-loop --manual-rerun .develop-review-loop/run-YYYYMMDD-HHMMSS-PID
+```
+
+The runner reuses the run directory instead of creating a new one. It reads
+`phases.tsv` and starts at the first phase that has no completed row. For
+example, if `review-3.md` exists and `phases.tsv` has rows through `review 3`,
+but `development-4.log` is only a rate-limit failure and no `development 4` row
+was recorded, the next run starts at `development-4`.
+
+Override the inference when needed:
+
+```bash
+develop-review-loop --manual-rerun .develop-review-loop/run-YYYYMMDD-HHMMSS-PID --rerun-from development-4
+```
+
+Future runs store `run.env` and `task.md` at creation time. Older interrupted
+runs may not have those files; in that case the rerun code recovers the original
+start commit from `summary.md` or the `git diff <commit>` command captured in
+review logs. If that recovery fails, pass `--start-ref <commit>`.
+
 ## Failure Behavior
 
 Preflight failures exit with code `2`. Examples:
 
-- missing task file;
+- missing task file for a normal run;
 - non-positive `--max`;
 - unsupported `DEV_AGENT` or `REVIEW_AGENT`;
 - missing selected agent executable;
@@ -376,7 +411,8 @@ the next development iteration until the cap is hit.
 
 Development-agent command failures are not masked by the script. Because the
 main script uses `set -euo pipefail`, a development command failure stops the
-run instead of asking the reviewer to evaluate incomplete work.
+run instead of asking the reviewer to evaluate incomplete work. Resume those
+runs later with `--manual-rerun`.
 
 ## Design Constraints
 

@@ -4,6 +4,7 @@ set -euo pipefail
 usage() {
   cat >&2 <<'EOF'
 Usage: develop-review-loop <task-file> [--max N] [--start-stage development|review]
+       develop-review-loop --manual-rerun <run-dir> [--max N] [--rerun-from development-N|review-N]
 
   <task-file>   Path to a markdown/plain-text file describing the task.
                 Contents are passed verbatim to the development agent on iteration 0.
@@ -13,6 +14,13 @@ Usage: develop-review-loop <task-file> [--max N] [--start-stage development|revi
                 changes are already present in the work tree.
   --start-review, --review-first
                 Alias for --start-stage review.
+  --manual-rerun <run-dir>
+                Reuse an interrupted .develop-review-loop/run-* directory.
+                The first incomplete stage is inferred from phases.tsv.
+  --rerun-from development-N|review-N
+                Override the inferred rerun stage for --manual-rerun.
+  --start-ref <commit>
+                Override the inferred original start commit for --manual-rerun.
 
 Project = $PWD (the target repo you cd into before running).
 Exit codes: 0 = review passed, 1 = max iterations hit without passing,
@@ -222,9 +230,153 @@ phase_duration_seconds() {
   local iteration="$2"
 
   awk -F '\t' -v stage="$stage" -v iteration="$iteration" '
-    NR > 1 && $1 == stage && $2 == iteration { print $5; found = 1; exit }
-    END { if (!found) print "" }
+    NR > 1 && $1 == stage && $2 == iteration { value = $5; found = 1 }
+    END { if (found) print value; else print "" }
   ' "$PHASES_TSV"
+}
+
+phase_completed() {
+  local stage="$1"
+  local iteration="$2"
+
+  [[ -f "$PHASES_TSV" ]] || return 1
+  awk -F '\t' -v stage="$stage" -v iteration="$iteration" '
+    NR > 1 && $1 == stage && $2 == iteration { found = 1 }
+    END { exit(found ? 0 : 1) }
+  ' "$PHASES_TSV"
+}
+
+review_file_passed() {
+  local iteration="$1"
+  local review_file="$ARTIFACTS/review-${iteration}.md"
+
+  [[ -f "$review_file" ]] || return 1
+  tail -n 3 "$review_file" | grep -q '^REVIEW_PASSED$'
+}
+
+expand_tilde_path() {
+  local path="$1"
+
+  case "$path" in
+    "~") printf '%s' "$HOME" ;;
+    "~/"*) printf '%s/%s' "$HOME" "${path#~/}" ;;
+    *) printf '%s' "$path" ;;
+  esac
+}
+
+write_run_metadata() {
+  local file="$1"
+
+  {
+    printf 'START_REF=%s\n' "$START_REF"
+    printf 'TASK_FILE=%s\n' "$TASK_FILE"
+    printf 'START_STAGE=%s\n' "$ORIGINAL_START_STAGE"
+    printf 'MAX=%s\n' "$MAX"
+    printf 'DEV_AGENT=%s\n' "$DEV_AGENT"
+    printf 'REVIEW_AGENT=%s\n' "$REVIEW_AGENT"
+    printf 'CODEX_MODEL=%s\n' "$CODEX_MODEL"
+  } >"$file"
+}
+
+infer_original_start_stage() {
+  local artifacts="$1"
+  local metadata_file="$artifacts/run.env"
+  local value
+
+  if value="$(read_env_value "START_STAGE" "$metadata_file" 2>/dev/null)"; then
+    value="$(trim_spaces "${value,,}")"
+    case "$value" in
+      development|review)
+        printf '%s' "$value"
+        return 0
+        ;;
+    esac
+  fi
+
+  if phase_completed "development" 0 || [[ -e "$artifacts/development-0.log" ]]; then
+    printf 'development'
+  else
+    printf 'review'
+  fi
+}
+
+infer_start_ref_from_run() {
+  local artifacts="$1"
+  local metadata_file="$artifacts/run.env"
+  local summary_file="$artifacts/summary.md"
+  local value
+  local -a logs
+
+  if [[ -n "$START_REF_OVERRIDE" ]]; then
+    printf '%s' "$START_REF_OVERRIDE"
+    return 0
+  fi
+
+  if value="$(read_env_value "START_REF" "$metadata_file" 2>/dev/null)" && [[ -n "$value" ]]; then
+    printf '%s' "$value"
+    return 0
+  fi
+
+  if [[ -f "$summary_file" ]]; then
+    value="$(awk -F ': ' '$1 == "- Start ref" { print $2; exit }' "$summary_file")"
+    if [[ -n "$value" ]]; then
+      printf '%s' "$value"
+      return 0
+    fi
+  fi
+
+  shopt -s nullglob
+  logs=("$artifacts"/review-*.log)
+  shopt -u nullglob
+  if (( ${#logs[@]} > 0 )); then
+    value="$(grep -Eho 'git diff [0-9a-f]{7,40}' "${logs[@]}" 2>/dev/null | awk '{ print $3; exit }' || true)"
+    if [[ -n "$value" ]]; then
+      printf '%s' "$value"
+      return 0
+    fi
+  fi
+
+  return 1
+}
+
+parse_rerun_from() {
+  local value="$1"
+
+  if [[ "$value" =~ ^(development|review)-([0-9]+)$ ]]; then
+    RERUN_STAGE="${BASH_REMATCH[1]}"
+    RERUN_ITERATION="$((10#${BASH_REMATCH[2]}))"
+    return 0
+  fi
+
+  echo "error: --rerun-from must look like development-N or review-N (got: $value)" >&2
+  exit 2
+}
+
+infer_rerun_start_from_phases() {
+  local iteration=0
+
+  while (( iteration < MAX )); do
+    if ! [[ "$ORIGINAL_START_STAGE" == "review" && "$iteration" -eq 0 ]]; then
+      if ! phase_completed "development" "$iteration"; then
+        printf 'development %s\n' "$iteration"
+        return 0
+      fi
+    fi
+
+    if ! phase_completed "review" "$iteration"; then
+      printf 'review %s\n' "$iteration"
+      return 0
+    fi
+
+    if review_file_passed "$iteration"; then
+      printf 'done %s\n' "$((iteration + 1))"
+      return 0
+    fi
+
+    iteration=$((iteration + 1))
+  done
+
+  printf 'done %s\n' "$MAX"
 }
 
 fmt_count() {
@@ -787,6 +939,11 @@ cleanup_old_runs() {
 TASK_FILE=""
 MAX=10
 START_STAGE="development"
+MANUAL_RERUN=""
+RERUN_FROM=""
+RERUN_STAGE=""
+RERUN_ITERATION=""
+START_REF_OVERRIDE=""
 
 while (( $# > 0 )); do
   case "$1" in
@@ -802,6 +959,21 @@ while (( $# > 0 )); do
       START_STAGE="${1#--start-stage=}"; shift ;;
     --start-review|--review-first)
       START_STAGE="review"; shift ;;
+    --manual-rerun|--resume-run|--rerun-run)
+      [[ $# -ge 2 ]] || { echo "error: $1 requires a run directory" >&2; usage; }
+      MANUAL_RERUN="$2"; shift 2 ;;
+    --manual-rerun=*|--resume-run=*|--rerun-run=*)
+      MANUAL_RERUN="${1#*=}"; shift ;;
+    --rerun-from)
+      [[ $# -ge 2 ]] || { echo "error: --rerun-from requires a value" >&2; usage; }
+      RERUN_FROM="$2"; shift 2 ;;
+    --rerun-from=*)
+      RERUN_FROM="${1#--rerun-from=}"; shift ;;
+    --start-ref)
+      [[ $# -ge 2 ]] || { echo "error: --start-ref requires a commit" >&2; usage; }
+      START_REF_OVERRIDE="$2"; shift 2 ;;
+    --start-ref=*)
+      START_REF_OVERRIDE="${1#--start-ref=}"; shift ;;
     -h|--help)
       usage ;;
     --)
@@ -817,7 +989,16 @@ while (( $# > 0 )); do
   esac
 done
 
-[[ -n "$TASK_FILE" ]] || { echo "error: <task-file> required" >&2; usage; }
+if [[ -n "$RERUN_FROM" ]]; then
+  parse_rerun_from "$RERUN_FROM"
+fi
+
+if [[ -z "$MANUAL_RERUN" ]]; then
+  [[ -z "$RERUN_FROM" ]] || { echo "error: --rerun-from requires --manual-rerun" >&2; exit 2; }
+  [[ -z "$START_REF_OVERRIDE" ]] || { echo "error: --start-ref is only valid with --manual-rerun" >&2; exit 2; }
+  [[ -n "$TASK_FILE" ]] || { echo "error: <task-file> required" >&2; usage; }
+fi
+
 [[ "$MAX" =~ ^[1-9][0-9]*$ ]] || { echo "error: --max must be a positive integer (got: $MAX)" >&2; exit 2; }
 START_STAGE="$(trim_spaces "${START_STAGE,,}")"
 case "$START_STAGE" in
@@ -825,7 +1006,9 @@ case "$START_STAGE" in
   *) echo "error: --start-stage must be one of: development, review (got: $START_STAGE)" >&2; exit 2 ;;
 esac
 
-[[ -r "$TASK_FILE" ]] || { echo "error: task file not readable: $TASK_FILE" >&2; exit 2; }
+if [[ -n "$TASK_FILE" ]]; then
+  [[ -r "$TASK_FILE" ]] || { echo "error: task file not readable: $TASK_FILE" >&2; exit 2; }
+fi
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 \
   || { echo "error: \$PWD is not inside a git work tree (the diff-based review depends on it)" >&2; exit 2; }
 
@@ -859,15 +1042,6 @@ check_agent_bin "review" "$REVIEW_AGENT"
 [[ "$KEEP_RUNS" =~ ^[1-9][0-9]*$ ]] \
   || { echo "error: DEVELOP_REVIEW_LOOP_KEEP_RUNS must be a positive integer (got: $KEEP_RUNS)" >&2; exit 2; }
 
-ARTIFACTS_ROOT=".develop-review-loop"
-RUN_ID="run-$(date +%Y%m%d-%H%M%S)-$$"
-ARTIFACTS="$ARTIFACTS_ROOT/$RUN_ID"
-PHASES_TSV="$ARTIFACTS/phases.tsv"
-mkdir -p "$ARTIFACTS_ROOT"
-mkdir "$ARTIFACTS"
-ln -sfn "$RUN_ID" "$ARTIFACTS_ROOT/latest" 2>/dev/null || true
-printf 'stage\titeration\tagent\tlog\tduration_seconds\n' >"$PHASES_TSV"
-
 log_phase() { printf '[loop %s] %s\n' "$(date +%H:%M:%S)" "$*"; }
 fmt_elapsed() {
   local s=$1
@@ -876,9 +1050,100 @@ fmt_elapsed() {
   fi
 }
 
-START_REF="$(git rev-parse HEAD)"
+ORIGINAL_START_STAGE="$START_STAGE"
+LOOP_START_STAGE="$START_STAGE"
+START_REVIEW_NUM=0
+MANUAL_RERUN_ENABLED=false
+TASK_CONTENT=""
+TASK_CONTENT_AVAILABLE=false
+
+ARTIFACTS_ROOT=".develop-review-loop"
+if [[ -n "$MANUAL_RERUN" ]]; then
+  MANUAL_RERUN_ENABLED=true
+  ARTIFACTS="$(expand_tilde_path "$MANUAL_RERUN")"
+  [[ -d "$ARTIFACTS" ]] || { echo "error: --manual-rerun directory not found: $ARTIFACTS" >&2; exit 2; }
+  ARTIFACTS_ROOT="$(dirname "$ARTIFACTS")"
+  RUN_ID="$(basename "$ARTIFACTS")"
+  PHASES_TSV="$ARTIFACTS/phases.tsv"
+  if [[ ! -f "$PHASES_TSV" ]]; then
+    printf 'stage\titeration\tagent\tlog\tduration_seconds\n' >"$PHASES_TSV"
+  fi
+  ORIGINAL_START_STAGE="$(infer_original_start_stage "$ARTIFACTS")"
+else
+  RUN_ID="run-$(date +%Y%m%d-%H%M%S)-$$"
+  ARTIFACTS="$ARTIFACTS_ROOT/$RUN_ID"
+  PHASES_TSV="$ARTIFACTS/phases.tsv"
+  mkdir -p "$ARTIFACTS_ROOT"
+  mkdir "$ARTIFACTS"
+  printf 'stage\titeration\tagent\tlog\tduration_seconds\n' >"$PHASES_TSV"
+fi
+
+ln -sfn "$RUN_ID" "$ARTIFACTS_ROOT/latest" 2>/dev/null || true
+
+if $MANUAL_RERUN_ENABLED; then
+  START_REF="$(infer_start_ref_from_run "$ARTIFACTS")" \
+    || { echo "error: could not infer original start ref for $ARTIFACTS; pass --start-ref <commit>" >&2; exit 2; }
+else
+  START_REF="$(git rev-parse HEAD)"
+fi
+git rev-parse --verify "$START_REF^{commit}" >/dev/null 2>&1 \
+  || { echo "error: start ref is not a valid commit in this repo: $START_REF" >&2; exit 2; }
+
 START_TIME="$(date +%s)"
-TASK_CONTENT="$(cat "$TASK_FILE")"
+RUN_TASK_FILE="$ARTIFACTS/task.md"
+RUN_METADATA="$ARTIFACTS/run.env"
+
+if [[ -n "$TASK_FILE" ]]; then
+  TASK_CONTENT="$(cat "$TASK_FILE")"
+  TASK_CONTENT_AVAILABLE=true
+elif METADATA_TASK_FILE="$(read_env_value "TASK_FILE" "$RUN_METADATA" 2>/dev/null)" && [[ -r "$METADATA_TASK_FILE" ]]; then
+  TASK_FILE="$METADATA_TASK_FILE"
+  TASK_CONTENT="$(cat "$TASK_FILE")"
+  TASK_CONTENT_AVAILABLE=true
+elif [[ -f "$RUN_TASK_FILE" ]]; then
+  TASK_CONTENT="$(cat "$RUN_TASK_FILE")"
+  TASK_CONTENT_AVAILABLE=true
+fi
+
+if [[ "$TASK_CONTENT_AVAILABLE" == true && ! -f "$RUN_TASK_FILE" ]]; then
+  printf '%s' "$TASK_CONTENT" >"$RUN_TASK_FILE"
+fi
+
+if [[ -z "$MANUAL_RERUN" || ! -f "$RUN_METADATA" ]]; then
+  write_run_metadata "$RUN_METADATA"
+fi
+
+if $MANUAL_RERUN_ENABLED; then
+  if [[ -n "$RERUN_STAGE" ]]; then
+    LOOP_START_STAGE="$RERUN_STAGE"
+    START_REVIEW_NUM="$RERUN_ITERATION"
+  else
+    read -r LOOP_START_STAGE START_REVIEW_NUM < <(infer_rerun_start_from_phases)
+    if [[ "$LOOP_START_STAGE" == "done" ]]; then
+      echo "error: $ARTIFACTS appears complete or already at --max $MAX; pass --max larger or --rerun-from development-N|review-N" >&2
+      exit 2
+    fi
+  fi
+
+  if (( START_REVIEW_NUM >= MAX )); then
+    echo "error: rerun start ${LOOP_START_STAGE}-${START_REVIEW_NUM} is outside --max $MAX; pass --max greater than $START_REVIEW_NUM" >&2
+    exit 2
+  fi
+fi
+
+if [[ "$LOOP_START_STAGE" == "development" && "$START_REVIEW_NUM" -eq 0 && "$TASK_CONTENT_AVAILABLE" != true ]]; then
+  echo "error: rerun from development-0 requires a task file or $RUN_TASK_FILE" >&2
+  exit 2
+fi
+
+if [[ "$LOOP_START_STAGE" == "development" && "$START_REVIEW_NUM" -gt 0 && ! -f "$ARTIFACTS/review-$((START_REVIEW_NUM - 1)).md" ]]; then
+  echo "error: rerun from development-${START_REVIEW_NUM} requires $ARTIFACTS/review-$((START_REVIEW_NUM - 1)).md" >&2
+  exit 2
+fi
+
+if $MANUAL_RERUN_ENABLED; then
+  log_phase "manual rerun: resuming $ARTIFACTS at ${LOOP_START_STAGE}-${START_REVIEW_NUM}"
+fi
 
 REVIEW_PROMPT="You are reviewing the cumulative changes in the current git work tree against the recorded start commit.
 
@@ -893,7 +1158,7 @@ Do not modify files. Do not commit.
 Do not write either token anywhere else in your review. The final line is the only signal."
 
 review_passed=false
-review_num=0
+review_num="$START_REVIEW_NUM"
 final_review_file=""
 final_review_log_file=""
 
@@ -902,8 +1167,8 @@ while [[ "$review_passed" == false && "$review_num" -lt "$MAX" ]]; do
   review_file="$ARTIFACTS/review-${review_num}.md"
   review_log_file="$ARTIFACTS/review-${review_num}.log"
 
-  if [[ "$START_STAGE" == "review" && "$review_num" -eq 0 ]]; then
-    log_phase "iter $review_num review-first: skipping development stage; reviewing existing work tree changes"
+  if [[ "$LOOP_START_STAGE" == "review" && "$review_num" -eq "$START_REVIEW_NUM" ]]; then
+    log_phase "iter $review_num review-start: skipping development stage; reviewing existing work tree changes"
   else
     if (( review_num == 0 )); then
       phase_label="implement"
@@ -968,14 +1233,23 @@ else
   exit_code=1
 fi
 
+TASK_FILE_SUMMARY="$TASK_FILE"
+if [[ -z "$TASK_FILE_SUMMARY" && -f "$RUN_TASK_FILE" ]]; then
+  TASK_FILE_SUMMARY="$RUN_TASK_FILE"
+elif [[ -z "$TASK_FILE_SUMMARY" ]]; then
+  TASK_FILE_SUMMARY="n/a (manual rerun)"
+fi
+
 cat >"$ARTIFACTS/summary.md" <<EOF
 # develop-review-loop summary
 
-- Task file: $TASK_FILE
+- Task file: $TASK_FILE_SUMMARY
 - Iterations used: $review_num / $MAX
 - Verdict: $verdict
 - Start ref: $START_REF
-- Start stage: $START_STAGE
+- Start stage: $ORIGINAL_START_STAGE
+- Manual rerun: $MANUAL_RERUN_ENABLED
+- Rerun start: ${LOOP_START_STAGE}-${START_REVIEW_NUM}
 - Duration: ${DURATION}s
 - Run directory: $ARTIFACTS
 - Retained run directories: $KEEP_RUNS
