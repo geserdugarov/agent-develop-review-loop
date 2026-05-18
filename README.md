@@ -3,11 +3,20 @@ Simple loop for development > review loop with HITL in the end.
 
 ## Setup (one time)
 
-Add this repo's checkout directory to `$PATH` so `develop-review-loop` resolves from any cwd:
+Create stable command links in `~/bin` so `develop-review-loop` resolves from
+any cwd without putting this checkout path in your shell config:
 
 ```bash
-# add to ~/.bashrc (or ~/.zshrc) once
-export PATH="$HOME/git/agent-develop-review-loop:$PATH"
+mkdir -p "$HOME/bin"
+ln -sfn "$PWD/develop-review-loop" "$HOME/bin/develop-review-loop"
+ln -sfn "$PWD/develop-review-loop-watch" "$HOME/bin/develop-review-loop-watch"
+```
+
+Make sure `~/bin` is on `$PATH`:
+
+```bash
+# add to ~/.bashrc (or ~/.zshrc) once, if not already present
+export PATH="$HOME/bin:$PATH"
 ```
 
 Then `source ~/.bashrc` and confirm:
@@ -16,7 +25,8 @@ Then `source ~/.bashrc` and confirm:
 command -v develop-review-loop
 ```
 
-If you cloned this repo elsewhere, substitute the actual path.
+If you move this checkout later, rerun the two `ln -sfn` commands from the new
+checkout directory. The shell `PATH` entry can stay unchanged.
 
 ## Usage
 

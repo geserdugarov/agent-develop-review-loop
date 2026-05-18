@@ -21,6 +21,26 @@ Supported agents for either role:
 - `claude`
 - `codex`
 
+## Setup
+
+Create stable command links in `~/bin`:
+
+```bash
+mkdir -p "$HOME/bin"
+ln -sfn "$PWD/develop-review-loop" "$HOME/bin/develop-review-loop"
+ln -sfn "$PWD/develop-review-loop-watch" "$HOME/bin/develop-review-loop-watch"
+```
+
+Make sure `~/bin` is on `$PATH`:
+
+```bash
+# add to ~/.bashrc (or ~/.zshrc) once, if not already present
+export PATH="$HOME/bin:$PATH"
+```
+
+If this tool repository moves, rerun the two `ln -sfn` commands from the new
+checkout directory. The shell `PATH` entry can stay unchanged.
+
 ## Commands
 
 ### `develop-review-loop`
@@ -378,5 +398,3 @@ run instead of asking the reviewer to evaluate incomplete work.
 - Inspect `summary.md` first after a run; then inspect the final `review-N.md`
   and corresponding logs if the run failed.
 - Use `develop-review-loop-watch` from another terminal to monitor long runs.
-- If this tool repository moves, update the shell `PATH` entry or use a stable
-  symlink such as `~/bin/develop-review-loop`.
