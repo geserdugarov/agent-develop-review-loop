@@ -7,7 +7,7 @@ Usage: develop-review-loop-watch [interval-seconds] [tail-lines]
 
 Tracks the most recently modified file in the latest run directory under
 $PWD/.develop-review-loop/ and re-tails it on every tick. As the loop advances
-(claude-N.log -> review-N.log -> review-N.md -> claude-(N+1).log -> ...), the
+(development-N.log -> review-N.log -> review-N.md -> development-(N+1).log -> ...), the
 displayed file follows automatically.
 
   interval-seconds   watch interval (default: 1)
@@ -32,7 +32,7 @@ run_dir=.develop-review-loop/latest
 if [ ! -d "$run_dir" ]; then
   run_dir=$(find .develop-review-loop -mindepth 1 -maxdepth 1 -type d -name "run-*" 2>/dev/null | sort | tail -n1)
 fi
-f=$(ls -1t "$run_dir"/claude-*.log "$run_dir"/review-*.log "$run_dir"/review-*.md "$run_dir"/summary.md 2>/dev/null | head -n1)
+f=$(ls -1t "$run_dir"/development-*.log "$run_dir"/review-*.log "$run_dir"/review-*.md "$run_dir"/summary.md 2>/dev/null | head -n1)
 printf "=== %s ===\n" "$f"
 tail -n '"$LINES"' "$f" 2>/dev/null
 '

@@ -1,8 +1,8 @@
-# Claude × Codex Review Loop
+# Configurable Agent Review Loop
 
 ## Context
 
-You want to drive a "implement → review → fix" loop where Claude does the work and Codex acts as the reviewer, repeating until Codex is satisfied (or a hard cap is hit). Today this means manually copying review comments back into Claude after each round. The wrapper automates that handoff so you can kick off a task in any project and walk away.
+You want to drive an "implement → review → fix" loop where one agent does the work and another agent acts as the reviewer, repeating until review passes (or a hard cap is hit). By default Claude handles development and Codex handles review, matching the original workflow. The wrapper automates that handoff so you can kick off a task in any project and walk away.
 
 This is intentionally project-agnostic — the script is invocation-agnostic of which repo it edits; `$PWD` decides that. The script itself lives in **this** repository (`agent-develop-review-loop`) so its own change history is preserved under git here, rather than as a loose file in `~/bin`. One-time setup: add this repo's checkout directory to `$PATH` so `develop-review-loop` resolves from anywhere.
 
@@ -12,7 +12,7 @@ This is intentionally project-agnostic — the script is invocation-agnostic of 
 develop-review-loop <task-file> [--max N]
 ```
 
-- `<task-file>` — path to a markdown/plain-text file describing the task. The contents are passed verbatim to Claude on iteration 0. May be a relative path (resolved against `$PWD`, i.e. the target repo) or absolute.
+- `<task-file>` — path to a markdown/plain-text file describing the task. The contents are passed verbatim to the configured development agent on iteration 0. May be a relative path (resolved against `$PWD`, i.e. the target repo) or absolute.
 - `--max N` — optional override of the iteration cap (default 10).
 - Project = `$PWD` (the target repo you cd into before running). The script does **not** take a `--project` flag — even though the script itself is hosted in `agent-develop-review-loop`, that is irrelevant at runtime; only `$PWD` matters for which tree gets edited.
 - Exit code: `0` if review passed, `1` if cap was hit without passing, `2` for usage/IO errors.
@@ -24,11 +24,11 @@ review_passed=false
 review_num=0
 while [[ $review_passed == false && $review_num -lt $MAX ]]; do
   if (( review_num == 0 )); then
-    run claude with the task
+    run development agent with the task
   else
-    run claude with the previous codex review
+    run development agent with the previous review
   fi
-  run codex; capture review; check sentinel
+  run review agent; capture review; check sentinel
   review_num++
 done
 ```
@@ -37,25 +37,27 @@ Note the condition is `&&`, not `||` — your original `||` would loop forever o
 
 ## Iteration behavior
 
-**Iteration 0 — implement.** Send Claude a prompt of the form:
+**Iteration 0 — implement.** Send the development agent a prompt of the form:
 
 > Implement the task below. Make code changes directly in the working tree of the current repo. Do not commit. Task:\n\n<contents of task file>
 
-Run via `claude -p "<prompt>"` (print/non-interactive mode). Tee stdout+stderr to `.develop-review-loop/<run-id>/claude-0.log`.
+The default `DEV_AGENT=claude` runs via `claude -p` (print/non-interactive mode). If `DEV_AGENT=codex`, the script uses `codex exec -s workspace-write --json`. Write stdout+stderr to `.develop-review-loop/<run-id>/development-0.log`.
 
-**Iteration N≥1 — fix.** Send Claude:
+**Iteration N≥1 — fix.** Send the development agent:
 
-> Codex reviewed your previous changes and flagged the issues below. Edit the code to address them. Do not revert unrelated work. Review:\n\n<contents of `review-{N-1}.md`>
+> The review stage flagged the issues below. Edit the code to address them. Do not revert unrelated work. Do not commit. Review:\n\n<contents of `review-{N-1}.md`>
 
-Same `claude -p` invocation; log to `claude-{N}.log`.
+Same configured development-agent invocation; log to `development-{N}.log`.
 
-**After each Claude run — review.** Capture the starting commit once at script start (`START_REF=$(git rev-parse HEAD)`), then on each iteration run:
+**After each development run — review.** Capture the starting commit once at script start (`START_REF=$(git rev-parse HEAD)`), then on each iteration run the configured review agent.
 
 ```
 codex exec --json --output-last-message .develop-review-loop/<run-id>/review-{N}.md "<review prompt>" > .develop-review-loop/<run-id>/review-{N}.log 2>&1
 ```
 
-The review prompt instructs Codex to:
+The default `REVIEW_AGENT=codex` uses the command above with `-s read-only`. If `REVIEW_AGENT=claude`, the script writes Claude's final response to `review-{N}.md` and records stderr plus the final response in `review-{N}.log`.
+
+The review prompt instructs the reviewer to:
 1. Inspect changes via `git diff $START_REF` (so it sees the cumulative delta, not just the latest fix).
 2. Check correctness, edge cases, style, security, regressions.
 3. End its output with **exactly one** of `REVIEW_PASSED` or `REVIEW_FAILED` on the final line.
@@ -64,9 +66,9 @@ The review prompt instructs Codex to:
 
 ## Artifacts (written to `.develop-review-loop/<run-id>/` in cwd)
 
-- `review-{N}.md` — final Codex review text for iteration N (the source of truth fed back into Claude on N+1).
-- `review-{N}.log` — JSONL stdout+stderr of the Codex review run for iteration N, for post-mortem and any usage/cost analysis supported by emitted Codex events.
-- `claude-{N}.log` — tee'd stdout+stderr of the Claude run for iteration N, for post-mortem when something goes sideways.
+- `review-{N}.md` — final review text for iteration N (the source of truth fed back into the development agent on N+1).
+- `review-{N}.log` — stdout+stderr of the review run for iteration N, for post-mortem and any usage/cost analysis supported by the selected agent.
+- `development-{N}.log` — stdout+stderr of the development run for iteration N, for post-mortem when something goes sideways.
 - `summary.md` — written at the end:
   - Task file path
   - Iterations used / max
@@ -75,7 +77,7 @@ The review prompt instructs Codex to:
   - Wall-clock duration
   - Final review file and review log paths
 
-The script should `mkdir -p` `.develop-review-loop/`, create a fresh `run-*` subdirectory per invocation, update `.develop-review-loop/latest`, and prune older `run-*` directories after summary generation. The number of retained run directories is configured by `DEVELOP_REVIEW_LOOP_KEEP_RUNS` in `./.env` and defaults to `3`. The plan notes that you may want to add `.develop-review-loop/` to your global gitignore once.
+The script should `mkdir -p` `.develop-review-loop/`, create a fresh `run-*` subdirectory per invocation, update `.develop-review-loop/latest`, and prune older `run-*` directories after summary generation. The number of retained run directories is configured by `DEVELOP_REVIEW_LOOP_KEEP_RUNS` in `./.env` and defaults to `3`. `DEV_AGENT`, `REVIEW_AGENT`, `CODEX_BIN`, and `CLAUDE_BIN` are also read from `./.env`, with exported shell variables taking precedence. The plan notes that you may want to add `.develop-review-loop/` to your global gitignore once.
 
 ## Files to create
 
@@ -95,13 +97,13 @@ No changes to any target/project repo at runtime. Nothing in `~/.claude/`. Nothi
 
 Single bash file, roughly:
 
-1. **Arg parsing & preflight.** Validate `<task-file>` exists and is readable. Confirm `claude` and `codex` are on `PATH` (`command -v`). Confirm `$PWD` is inside a git work tree (`git rev-parse --is-inside-work-tree`); fail with a clear message if not — the diff-based review depends on it.
+1. **Arg parsing & preflight.** Validate `<task-file>` exists and is readable. Read `./.env` configuration. Confirm the selected agent binaries are on `PATH` or executable at their configured paths (`command -v`). Confirm `$PWD` is inside a git work tree (`git rev-parse --is-inside-work-tree`); fail with a clear message if not — the diff-based review depends on it.
 2. **Setup.** `mkdir -p .develop-review-loop`. Capture `START_REF`, `START_TIME`, read task file into a variable.
-3. **Loop.** As described above. Redirect Claude output to its log; redirect Codex JSONL output to a review log while `--output-last-message` writes the final review file.
+3. **Loop.** As described above. Redirect development-agent output to its log; redirect review-agent output to a review log while writing the final review file.
 4. **Pass check.** Anchored `grep` on `tail -n 3` of the review file.
 5. **Summary + exit.** Write `summary.md`, exit `0` on pass / `1` on cap-without-pass.
 
-No Python, no extra deps — bash + `git` + `claude` + `codex` is the entire surface.
+No Python, no extra deps — bash + `git` + the selected agent CLIs are the entire surface.
 
 ## Verification
 
@@ -112,7 +114,7 @@ End-to-end, in a throwaway repo:
 2. Write a small task: `echo "Create hello.py that prints 'hello'" > task.md`
 3. Run: `develop-review-loop ./task.md --max 3`
 4. Confirm: `hello.py` exists with reasonable content under `/tmp/loop-test`; `.develop-review-loop/latest/review-0.md` ends with `REVIEW_PASSED` or `REVIEW_FAILED`; `.develop-review-loop/latest/summary.md` records the verdict. Confirm nothing was written under `~/git/agent-develop-review-loop` — the script must only touch `$PWD`.
-5. Negative test — give an intentionally underspecified task to force at least one failed review, and check that iteration 1 receives the review file as context (visible in `claude-1.log`).
+5. Negative test — give an intentionally underspecified task to force at least one failed review, and check that iteration 1 receives the review file as context (visible in `development-1.log`).
 6. Cap test — set `--max 1` on a task you expect to fail review, and confirm exit code `1` and a `FAILED` summary.
 7. Commit the script + README change in this repo so the change history is preserved here (the whole point of moving it out of `~/bin`).
 
