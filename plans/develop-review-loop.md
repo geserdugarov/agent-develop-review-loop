@@ -9,11 +9,12 @@ This is intentionally project-agnostic — the script is invocation-agnostic of 
 ## CLI
 
 ```
-develop-review-loop <task-file> [--max N]
+develop-review-loop <task-file> [--max N] [--start-stage development|review]
 ```
 
 - `<task-file>` — path to a markdown/plain-text file describing the task. The contents are passed verbatim to the configured development agent on iteration 0. May be a relative path (resolved against `$PWD`, i.e. the target repo) or absolute.
 - `--max N` — optional override of the iteration cap (default 10).
+- `--start-stage development|review` — optional starting stage (default `development`). Use `review` when another agent run already left changes in the work tree. `--start-review` and `--review-first` are aliases for `--start-stage review`.
 - Project = `$PWD` (the target repo you cd into before running). The script does **not** take a `--project` flag — even though the script itself is hosted in `agent-develop-review-loop`, that is irrelevant at runtime; only `$PWD` matters for which tree gets edited.
 - Exit code: `0` if review passed, `1` if cap was hit without passing, `2` for usage/IO errors.
 
@@ -23,7 +24,9 @@ develop-review-loop <task-file> [--max N]
 review_passed=false
 review_num=0
 while [[ $review_passed == false && $review_num -lt $MAX ]]; do
-  if (( review_num == 0 )); then
+  if start stage is review and review_num == 0; then
+    skip development and review the existing work tree changes
+  elif (( review_num == 0 )); then
     run development agent with the task
   else
     run development agent with the previous review
@@ -42,6 +45,8 @@ Note the condition is `&&`, not `||` — your original `||` would loop forever o
 > Implement the task below. Make code changes directly in the working tree of the current repo. Do not commit. Task:\n\n<contents of task file>
 
 The default `DEV_AGENT=claude` runs via `claude -p` (print/non-interactive mode). If `DEV_AGENT=codex`, the script uses `codex exec -s workspace-write --json`. Write stdout+stderr to `.develop-review-loop/<run-id>/development-0.log`.
+
+**Review-first mode.** With `--start-stage review`, iteration 0 skips the development agent and immediately reviews the existing work tree diff against the start ref. No `development-0.log` is written for this mode. If review 0 fails, iteration 1 runs the normal fix stage using `review-0.md` as feedback.
 
 **Iteration N≥1 — fix.** Send the development agent:
 

@@ -22,11 +22,12 @@ If you cloned this repo elsewhere, substitute the actual path.
 
 ```bash
 cd /path/to/target/repo
-develop-review-loop ./task.md [--max N]
+develop-review-loop ./task.md [--max N] [--start-stage development|review]
 ```
 
 - `<task-file>`: markdown / plain-text describing the task.
 - `--max N`: iteration cap (default `10`).
+- `--start-stage development|review`: stage to start from (default `development`). Use `review` when changes are already present in the work tree from a separate agent run. `--start-review` and `--review-first` are aliases for `--start-stage review`.
 - Project = `$PWD` (the repo you cd into). Artifacts land in a per-run subdirectory under `.develop-review-loop/`.
 - Exit codes: `0` review passed, `1` cap hit without passing, `2` usage / preflight error.
 
@@ -79,6 +80,8 @@ Each invocation writes to `.develop-review-loop/run-YYYYMMDD-HHMMSS-PID/`. The s
 - `review-N.md`: final review text for iteration `N`, used as feedback for the next development pass.
 - `phases.tsv`: per-stage timing metadata used by the summary.
 - `summary.md`: final verdict, loop metadata, and post-run usage/cost estimate tables for the development and review agents.
+
+When started with `--start-stage review`, iteration `0` skips `development-0.log` and reviews the existing work tree diff against `HEAD`. If that review fails, iteration `1` continues with the normal fix stage using `review-0.md` as feedback.
 
 Cost estimates are derived from JSON usage metadata when agent logs expose it. Reported CLI costs are preferred; otherwise the script applies known first-party API token rates as a best-effort estimate. For Codex logs that omit the model name, the estimate falls back to `CODEX_MODEL` and then the configured Codex model in `$CODEX_HOME/config.toml` or `~/.codex/config.toml`. Subscription plans, third-party providers, regional pricing, long-context modes, priority processing, and separate tool fees can differ.
 
