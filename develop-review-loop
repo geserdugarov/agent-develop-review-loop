@@ -1,6 +1,33 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Bash reads script files incrementally. If this repository is edited while the
+# loop is running, in-place rewrites can corrupt the parser's view of this file.
+# Run from a private copy when executed as a command; keep sourcing unchanged so
+# tests can load helper functions.
+if [[ "${BASH_SOURCE[0]}" == "$0" && -z "${DEVELOP_REVIEW_LOOP_RUNNING_COPY:-}" ]]; then
+  self_source="${BASH_SOURCE[0]}"
+  if [[ "$self_source" != */* && ! -r "$self_source" ]]; then
+    self_source="$(command -v -- "$self_source")" \
+      || { echo "error: could not locate develop-review-loop on PATH" >&2; exit 2; }
+  fi
+
+  self_copy="$(mktemp "${TMPDIR:-/tmp}/develop-review-loop.XXXXXX")" \
+    || { echo "error: could not create temporary script copy" >&2; exit 2; }
+  cp -- "$self_source" "$self_copy" \
+    || { echo "error: could not copy $self_source to $self_copy" >&2; exit 2; }
+  chmod 700 "$self_copy"
+
+  export DEVELOP_REVIEW_LOOP_RUNNING_COPY="$self_copy"
+  exec bash "$self_copy" "$@"
+fi
+
+if [[ -n "${DEVELOP_REVIEW_LOOP_RUNNING_COPY:-}" ]]; then
+  _develop_review_loop_running_copy="$DEVELOP_REVIEW_LOOP_RUNNING_COPY"
+  unset DEVELOP_REVIEW_LOOP_RUNNING_COPY
+  trap 'rm -f "$_develop_review_loop_running_copy"' EXIT
+fi
+
 # Force C locale so awk/printf produce dots (not commas) in decimal output and
 # sort orders are stable regardless of the user's locale.
 export LC_ALL=C
