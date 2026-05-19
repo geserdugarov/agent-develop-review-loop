@@ -159,19 +159,32 @@ codex_config_model() {
 run_development_agent() {
   local agent="$1"
   local prompt="$2"
-  local log_file="$3"
+  local development_file="$3"
+  local log_file="$4"
   local bin
   local -a args
 
   bin="$(agent_bin "$agent")"
+  : >"$development_file"
+
   case "$agent" in
     claude)
-      printf '%s' "$prompt" | "$bin" -p --dangerously-skip-permissions \
-        --output-format stream-json --include-partial-messages --verbose \
-        >"$log_file" 2>&1
+      if command -v jq >/dev/null 2>&1; then
+        printf '%s' "$prompt" | "$bin" -p --dangerously-skip-permissions \
+          --output-format stream-json --include-partial-messages --verbose \
+          >"$log_file" 2>&1
+        jq -Rsr '[split("\n")[] | fromjson? | select(.type == "result" and (.result? != null)) | .result] | last // ""' \
+          "$log_file" >"$development_file" 2>/dev/null || true
+      else
+        printf '%s' "$prompt" | "$bin" -p --dangerously-skip-permissions >"$development_file" 2>"$log_file"
+        {
+          printf '\n--- final development message ---\n'
+          cat "$development_file"
+        } >>"$log_file"
+      fi
       ;;
     codex)
-      args=(exec -s workspace-write --json)
+      args=(exec -s workspace-write --json --output-last-message "$development_file")
       [[ -n "$CODEX_MODEL" ]] && args+=(-m "$CODEX_MODEL")
       args+=("$prompt")
       "$bin" "${args[@]}" </dev/null >"$log_file" 2>&1
@@ -1163,6 +1176,7 @@ final_review_file=""
 final_review_log_file=""
 
 while [[ "$review_passed" == false && "$review_num" -lt "$MAX" ]]; do
+  development_file="$ARTIFACTS/development-${review_num}.md"
   log_file="$ARTIFACTS/development-${review_num}.log"
   review_file="$ARTIFACTS/review-${review_num}.md"
   review_log_file="$ARTIFACTS/review-${review_num}.log"
@@ -1190,7 +1204,13 @@ ${review_content}"
 
     log_phase "iter $review_num $phase_label: start (tail -f $log_file or run develop-review-loop-watch for live progress)"
     phase_start=$(date +%s)
-    run_development_agent "$DEV_AGENT" "$development_prompt" "$log_file"
+    run_development_agent "$DEV_AGENT" "$development_prompt" "$development_file" "$log_file"
+    if [[ ! -s "$development_file" ]]; then
+      cat >"$development_file" <<EOF
+Development agent '$DEV_AGENT' did not produce a final development message.
+See $log_file for the raw development-stage log.
+EOF
+    fi
     phase_duration=$(($(date +%s) - phase_start))
     record_phase "development" "$review_num" "$DEV_AGENT" "$log_file" "$phase_duration"
     log_phase "iter $review_num $phase_label: done ($(fmt_elapsed "$phase_duration"))"

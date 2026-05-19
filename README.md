@@ -103,13 +103,14 @@ develop-review-loop-watch              # 1s interval, 20 lines
 develop-review-loop-watch 2 40         # 2s interval, 40 lines
 ```
 
-Tracks the newest file in `.develop-review-loop/latest` and re-tails it each tick, so the view follows the loop automatically as `development-N.log` → `review-N.log` → `review-N.md` → `development-(N+1).log`.
+Tracks the newest file in `.develop-review-loop/latest` and re-tails it each tick, so the view follows the loop automatically as `development-N.log` → `development-N.md` → `review-N.log` → `review-N.md`.
 
 ### Artifacts
 
 Each invocation writes to `.develop-review-loop/run-YYYYMMDD-HHMMSS-PID/`. The script also updates `.develop-review-loop/latest` to point at the newest run directory and prunes older `run-*` directories according to `DEVELOP_REVIEW_LOOP_KEEP_RUNS`.
 
-- `development-N.log`: development-stage stdout/stderr for iteration `N`.
+- `development-N.log`: development-stage log for iteration `N`.
+- `development-N.md`: final development-stage message for iteration `N`.
 - `review-N.log`: review-stage stdout/stderr for iteration `N`. Codex review logs are JSONL and include any usage events emitted by Codex.
 - `review-N.md`: final review text for iteration `N`, used as feedback for the next development pass.
 - `phases.tsv`: per-stage timing metadata used by the summary.

@@ -169,7 +169,7 @@ directory and repeatedly tails the newest generated artifact. It follows the run
 as files appear, typically moving through:
 
 ```text
-development-N.log -> review-N.log -> review-N.md -> development-(N+1).log
+development-N.log -> development-N.md -> review-N.log -> review-N.md
 ```
 
 It requires the system `watch` command.
@@ -260,7 +260,8 @@ skip development
 run development agent   v
   |               write review-N.md
   v                     |
-write development-N.log v
+write development-N.log
+and development-N.md    v
   |               sentinel passed?
   +----------->----------+
                          |
@@ -311,12 +312,17 @@ Review:
 
 Configured invocations:
 
-- Claude: `claude -p --dangerously-skip-permissions --output-format stream-json --include-partial-messages --verbose`
-- Codex: `codex exec -s workspace-write --json`
+- Claude with `jq` available: Claude writes stream JSON to `development-N.log`;
+  `jq` extracts the final result into `development-N.md`.
+- Claude without `jq`: Claude writes the final development message directly to
+  `development-N.md`, with stderr and the final message copied into
+  `development-N.log`.
+- Codex: `codex exec -s workspace-write --json --output-last-message development-N.md`
 
 If `CODEX_MODEL` is set, Codex invocations include `-m "$CODEX_MODEL"`.
 
-Development stdout and stderr are captured in `development-N.log`.
+Development output is captured in `development-N.log`; the final development
+message is saved in `development-N.md`.
 
 ### Review Stage
 
@@ -394,7 +400,8 @@ Generated files:
 
 | File | Description |
 | --- | --- |
-| `development-N.log` | Development-stage stdout and stderr for iteration `N`. Not written for review-first iteration `0`. |
+| `development-N.log` | Development-stage log for iteration `N`. Not written for review-first iteration `0`. |
+| `development-N.md` | Final development-stage message for iteration `N`. Not written for review-first iteration `0`. |
 | `review-N.log` | Review-stage stdout and stderr for iteration `N`. |
 | `review-N.md` | Final review text and sentinel for iteration `N`. Fed back into the next development stage when review fails. |
 | `phases.tsv` | Tab-separated timing metadata: stage, iteration, agent, log path, duration seconds. |
