@@ -41,6 +41,91 @@ export PATH="$HOME/bin:$PATH"
 If this tool repository moves, rerun the two `ln -sfn` commands from the new
 checkout directory. The shell `PATH` entry can stay unchanged.
 
+## Bash Tab Completion
+
+Install this optional Bash completion to complete flags, task files,
+`.develop-review-loop/run-*` directories after `--manual-rerun`, allowed
+`--start-stage` values, and common `--rerun-from` values.
+
+Create `~/.local/share/bash-completion/completions/develop-review-loop`:
+
+```bash
+mkdir -p ~/.local/share/bash-completion/completions
+```
+
+File contents:
+
+```bash
+_develop_review_loop() {
+  local cur prev
+  COMPREPLY=()
+  cur="${COMP_WORDS[COMP_CWORD]}"
+  prev="${COMP_WORDS[COMP_CWORD-1]}"
+
+  local opts="
+    --max
+    --start-stage
+    --start-review
+    --review-first
+    --manual-rerun
+    --resume-run
+    --rerun-run
+    --rerun-from
+    --start-ref
+    --help
+    -h
+  "
+
+  case "$prev" in
+    --manual-rerun|--resume-run|--rerun-run)
+      COMPREPLY=( $(compgen -d -- "${cur:-.develop-review-loop/run-}") )
+      [[ ${#COMPREPLY[@]} -gt 0 ]] || COMPREPLY=( $(compgen -d -- "$cur") )
+      return
+      ;;
+    --start-stage)
+      COMPREPLY=( $(compgen -W "development review" -- "$cur") )
+      return
+      ;;
+    --rerun-from)
+      local stages="" i
+      for i in {0..20}; do
+        stages+=" development-$i review-$i"
+      done
+      COMPREPLY=( $(compgen -W "$stages" -- "$cur") )
+      return
+      ;;
+    --max)
+      return
+      ;;
+  esac
+
+  if [[ "$cur" == --* ]]; then
+    COMPREPLY=( $(compgen -W "$opts" -- "$cur") )
+    return
+  fi
+
+  COMPREPLY=( $(compgen -f -- "$cur") )
+}
+
+complete -o filenames -F _develop_review_loop develop-review-loop
+```
+
+Open a new shell or load it immediately:
+
+```bash
+source ~/.local/share/bash-completion/completions/develop-review-loop
+```
+
+If your Bash setup does not load files from that directory automatically, add
+the `source` line above to `~/.bashrc`.
+
+The repository command is named `develop-review-loop`. If you maintain an
+additional alias or symlink named `development-review-loop`, register both names:
+
+```bash
+complete -o filenames -F _develop_review_loop develop-review-loop development-review-loop
+```
+
 ## Commands
 
 ### `develop-review-loop`

@@ -28,6 +28,26 @@ command -v develop-review-loop
 If you move this checkout later, rerun the two `ln -sfn` commands from the new
 checkout directory. The shell `PATH` entry can stay unchanged.
 
+### Bash tab completion
+
+Optional Bash completion can complete flags, `--start-stage` values,
+`--rerun-from` values, task files, and `.develop-review-loop/run-*` directories
+after `--manual-rerun`.
+
+Create `~/.local/share/bash-completion/completions/develop-review-loop` with the
+completion function from [docs/README.md](docs/README.md#bash-tab-completion),
+then open a new shell or source the file:
+
+```bash
+source ~/.local/share/bash-completion/completions/develop-review-loop
+```
+
+If your Bash setup does not load that directory automatically, add the `source`
+line above to `~/.bashrc`.
+
+The command name in this repo is `develop-review-loop`. If you also expose it as
+`development-review-loop`, register that name in the completion file too.
+
 ## Usage
 
 ```bash
