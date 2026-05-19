@@ -1,0 +1,6 @@
+# Project-wide shellcheck configuration.
+# Only report errors and warnings (skip info / style).
+severity=warning
+
+# Tests source helpers dynamically; can't follow non-constant sources.
+disable=SC1090,SC1091

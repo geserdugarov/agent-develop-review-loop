@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Force C locale so awk/printf produce dots (not commas) in decimal output and
+# sort orders are stable regardless of the user's locale.
+export LC_ALL=C
+
 usage() {
   cat >&2 <<'EOF'
 Usage: develop-review-loop <task-file> [--max N] [--start-stage development|review]
@@ -36,10 +40,22 @@ trim_spaces() {
   printf '%s' "$value"
 }
 
+strip_wrapping_quotes() {
+  local value="$1"
+
+  if [[ "$value" =~ ^\"(.*)\"$ ]]; then
+    value="${BASH_REMATCH[1]}"
+  elif [[ "$value" =~ ^\'(.*)\'$ ]]; then
+    value="${BASH_REMATCH[1]}"
+  fi
+
+  printf '%s' "$value"
+}
+
 read_env_value() {
   local name="$1"
   local file="$2"
-  local line value
+  local line value stripped q after inner
 
   [[ -f "$file" ]] || return 1
 
@@ -54,15 +70,37 @@ read_env_value() {
 
     [[ "$line" == "$name="* ]] || continue
 
+    # Keep the raw RHS so we can tell whether a `#` is preceded by
+    # whitespace (an inline comment) or sits flush against the value
+    # (a literal `#`, e.g. a URL fragment). Use the trimmed copy only
+    # to dispatch on the first non-whitespace character.
     value="${line#*=}"
-    value="${value%%#*}"
-    value="$(trim_spaces "$value")"
+    stripped="$(trim_spaces "$value")"
 
-    if [[ "$value" =~ ^\"(.*)\"$ ]]; then
-      value="${BASH_REMATCH[1]}"
-    elif [[ "$value" =~ ^\'(.*)\'$ ]]; then
-      value="${BASH_REMATCH[1]}"
-    fi
+    case "${stripped:0:1}" in
+      '"'|"'")
+        # Quoted value: take everything up to the matching closing quote.
+        # Anything after (including #) is treated as a trailing comment.
+        value="$stripped"
+        q="${value:0:1}"
+        after="${value:1}"
+        inner="${after%%"$q"*}"
+        [[ "$inner" != "$after" ]] && value="$q$inner$q"
+        ;;
+      *)
+        # Unquoted: strip the first whitespace-`#` sequence and everything
+        # after it. Operating on the raw RHS preserves the distinction
+        # between `KEY= # comment` (empty value) and `KEY=#literal`
+        # (literal `#`), and works when the value itself contains `#`
+        # (e.g. `URL=http://x.example/#frag # comment`).
+        if [[ "$value" == *[[:space:]]\#* ]]; then
+          value="${value%%[[:space:]]\#*}"
+        fi
+        value="$(trim_spaces "$value")"
+        ;;
+    esac
+
+    value="$(strip_wrapping_quotes "$value")"
 
     printf '%s\n' "$value"
     return 0
@@ -84,18 +122,6 @@ read_config_value() {
   fi
 
   printf '%s' "${value:-$default_value}"
-}
-
-strip_wrapping_quotes() {
-  local value="$1"
-
-  if [[ "$value" =~ ^\"(.*)\"$ ]]; then
-    value="${BASH_REMATCH[1]}"
-  elif [[ "$value" =~ ^\'(.*)\'$ ]]; then
-    value="${BASH_REMATCH[1]}"
-  fi
-
-  printf '%s' "$value"
 }
 
 validate_agent() {
@@ -272,7 +298,7 @@ expand_tilde_path() {
 
   case "$path" in
     "~") printf '%s' "$HOME" ;;
-    "~/"*) printf '%s/%s' "$HOME" "${path#~/}" ;;
+    "~/"*) printf '%s/%s' "$HOME" "${path#'~/'}" ;;
     *) printf '%s' "$path" ;;
   esac
 }
@@ -921,6 +947,15 @@ append_usage_summary() {
   append_stage_usage_summary "$summary_file" "$artifacts" "review" "$REVIEW_AGENT" "review" "Review Agent Usage"
 }
 
+log_phase() { printf '[loop %s] %s\n' "$(date +%H:%M:%S)" "$*"; }
+
+fmt_elapsed() {
+  local s=$1
+  if (( s >= 60 )); then printf '%dm%02ds' "$((s/60))" "$((s%60))"
+  else printf '%ds' "$s"
+  fi
+}
+
 cleanup_old_runs() {
   local root="$1"
   local keep="$2"
@@ -948,6 +983,9 @@ cleanup_old_runs() {
 
   return 0
 }
+
+# Allow the test suite to load helpers without running the loop.
+(return 0 2>/dev/null) && return 0
 
 TASK_FILE=""
 MAX=10
@@ -1006,6 +1044,13 @@ if [[ -n "$RERUN_FROM" ]]; then
   parse_rerun_from "$RERUN_FROM"
 fi
 
+if [[ -n "$START_REF_OVERRIDE" ]]; then
+  # Restrict to characters git permits in commits, refs, and short SHAs; the
+  # value is later passed to git rev-parse and embedded in the review prompt.
+  [[ "$START_REF_OVERRIDE" =~ ^[A-Za-z0-9._/@^~+=-]+$ ]] \
+    || { echo "error: --start-ref contains unsupported characters: $START_REF_OVERRIDE" >&2; exit 2; }
+fi
+
 if [[ -z "$MANUAL_RERUN" ]]; then
   [[ -z "$RERUN_FROM" ]] || { echo "error: --rerun-from requires --manual-rerun" >&2; exit 2; }
   [[ -z "$START_REF_OVERRIDE" ]] || { echo "error: --start-ref is only valid with --manual-rerun" >&2; exit 2; }
@@ -1054,14 +1099,6 @@ check_agent_bin "development" "$DEV_AGENT"
 check_agent_bin "review" "$REVIEW_AGENT"
 [[ "$KEEP_RUNS" =~ ^[1-9][0-9]*$ ]] \
   || { echo "error: DEVELOP_REVIEW_LOOP_KEEP_RUNS must be a positive integer (got: $KEEP_RUNS)" >&2; exit 2; }
-
-log_phase() { printf '[loop %s] %s\n' "$(date +%H:%M:%S)" "$*"; }
-fmt_elapsed() {
-  local s=$1
-  if (( s >= 60 )); then printf '%dm%02ds' "$((s/60))" "$((s%60))"
-  else printf '%ds' "$s"
-  fi
-}
 
 ORIGINAL_START_STAGE="$START_STAGE"
 LOOP_START_STAGE="$START_STAGE"

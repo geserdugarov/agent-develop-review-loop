@@ -43,71 +43,16 @@ checkout directory. The shell `PATH` entry can stay unchanged.
 
 ## Bash Tab Completion
 
-Install this optional Bash completion to complete flags, task files,
-`.develop-review-loop/run-*` directories after `--manual-rerun`, allowed
-`--start-stage` values, and common `--rerun-from` values.
+Install the bundled `completions/develop-review-loop.bash` to complete flags,
+task files, `.develop-review-loop/run-*` directories after `--manual-rerun`,
+allowed `--start-stage` values, and common `--rerun-from` values.
 
-Create `~/.local/share/bash-completion/completions/develop-review-loop`:
+Symlink it into the standard bash-completion directory:
 
 ```bash
 mkdir -p ~/.local/share/bash-completion/completions
-```
-
-File contents:
-
-```bash
-_develop_review_loop() {
-  local cur prev
-  COMPREPLY=()
-  cur="${COMP_WORDS[COMP_CWORD]}"
-  prev="${COMP_WORDS[COMP_CWORD-1]}"
-
-  local opts="
-    --max
-    --start-stage
-    --start-review
-    --review-first
-    --manual-rerun
-    --resume-run
-    --rerun-run
-    --rerun-from
-    --start-ref
-    --help
-    -h
-  "
-
-  case "$prev" in
-    --manual-rerun|--resume-run|--rerun-run)
-      COMPREPLY=( $(compgen -d -- "${cur:-.develop-review-loop/run-}") )
-      [[ ${#COMPREPLY[@]} -gt 0 ]] || COMPREPLY=( $(compgen -d -- "$cur") )
-      return
-      ;;
-    --start-stage)
-      COMPREPLY=( $(compgen -W "development review" -- "$cur") )
-      return
-      ;;
-    --rerun-from)
-      local stages="" i
-      for i in {0..20}; do
-        stages+=" development-$i review-$i"
-      done
-      COMPREPLY=( $(compgen -W "$stages" -- "$cur") )
-      return
-      ;;
-    --max)
-      return
-      ;;
-  esac
-
-  if [[ "$cur" == --* ]]; then
-    COMPREPLY=( $(compgen -W "$opts" -- "$cur") )
-    return
-  fi
-
-  COMPREPLY=( $(compgen -f -- "$cur") )
-}
-
-complete -o filenames -F _develop_review_loop develop-review-loop
+ln -sfn "$PWD/completions/develop-review-loop.bash" \
+  ~/.local/share/bash-completion/completions/develop-review-loop
 ```
 
 Open a new shell or load it immediately:
@@ -119,12 +64,9 @@ source ~/.local/share/bash-completion/completions/develop-review-loop
 If your Bash setup does not load files from that directory automatically, add
 the `source` line above to `~/.bashrc`.
 
-The repository command is named `develop-review-loop`. If you maintain an
-additional alias or symlink named `development-review-loop`, register both names:
-
-```bash
-complete -o filenames -F _develop_review_loop develop-review-loop development-review-loop
-```
+The bundled file registers completion for both `develop-review-loop` and the
+alias `development-review-loop`, so no extra `complete` call is needed when you
+maintain the alias.
 
 ## Commands
 
@@ -206,6 +148,11 @@ selected CLIs, capture logs, detect the review sentinel, and summarize the run.
 
 - `develop-review-loop`: main orchestration script.
 - `develop-review-loop-watch`: terminal watcher for the newest run artifact.
+- `completions/develop-review-loop.bash`: Bash tab completion file.
+- `tests/`: pure-bash unit tests (no extra runtime dependency). Run with
+  `tests/run.sh`.
+- `.github/workflows/ci.yml`: GitHub Actions workflow that runs ShellCheck and
+  the test suite on pull requests and on pushes to `main`.
 - `.env.example`: runtime configuration template for target repositories.
 - `README.md`: quick setup and usage.
 - `docs/README.md`: project behavior and architecture reference.
@@ -379,8 +326,11 @@ Supported variables:
 | `DEVELOP_REVIEW_LOOP_KEEP_RUNS` | `3` | Number of `.develop-review-loop/run-*` directories to retain, including the current run. |
 
 Configuration parsing supports plain `KEY=value` lines, optional `export`,
-single or double wrapping quotes, whitespace around values, comments, and blank
-lines.
+single or double wrapping quotes, whitespace around values, full-line `#`
+comments, and inline `#` comments preceded by whitespace. Inside quoted values
+the `#` character is preserved literally (so `URL=http://x.example/#frag`
+keeps the fragment). Blank lines are ignored. The first matching `KEY=` line
+wins. The file is parsed, never `source`d.
 
 ## Artifacts
 
@@ -516,6 +466,52 @@ runs later with `--manual-rerun`.
   read-only operation when using Codex and explicitly instructed not to edit.
 - Generated artifacts live under `.develop-review-loop/`.
 - This tool does not commit changes.
+
+## Testing
+
+The repo ships a small pure-bash test suite under `tests/`. Each `test_*.sh`
+file is a self-contained bash script; the runner discovers and executes them:
+
+```bash
+tests/run.sh
+```
+
+The tests source `develop-review-loop` so they can call internal helpers
+directly. A guard in the main script returns early when the script is sourced
+instead of executed, so no side effects run during tests. Tests rely only on
+`bash`, `awk`, `grep`, `git`, `mktemp`, and (for `tests/test_cli_preflight.sh`)
+the ability to `git init` in `mktemp`-created directories.
+
+GitHub Actions runs the same suite plus `shellcheck --severity=warning` on
+pull requests and on pushes to `main`. See `.github/workflows/ci.yml`.
+
+## Security Notes
+
+The loop is a thin wrapper around two long-running AI CLIs that edit the
+working tree. A few specifics are worth calling out:
+
+- **`--dangerously-skip-permissions` for Claude.** Both stages invoke `claude`
+  with this flag so the run can complete non-interactively. The dev stage
+  agent has full write access to the working tree; the review stage does too
+  when `REVIEW_AGENT=claude`, even though the prompt instructs it not to edit
+  files. Only run the loop inside a repository you would let an unattended
+  agent modify, and inspect `git status` after each run.
+- **Codex review uses `-s read-only`.** When `REVIEW_AGENT=codex`, Codex is
+  restricted by its own sandbox. The dev stage runs with
+  `-s workspace-write`, which limits Codex to the current workspace.
+- **`.env` is read from the target repo, not this tool repo.** Values like
+  `CLAUDE_BIN`, `CODEX_BIN`, and `CODEX_MODEL` are read from the target's
+  `./.env` and used as executable paths or as a model name passed to the CLI.
+  Treat target repositories the same way you treat their shell `PATH`: if you
+  cd into an untrusted repo, do not run `develop-review-loop` there without
+  first inspecting `.env`. The parser only recognizes a fixed list of keys
+  (see the configuration table) and never `source`s the file.
+- **`--start-ref` is validated.** The override is restricted to characters git
+  permits in commits, refs, and short SHAs before being passed to
+  `git rev-parse` and embedded in the review prompt.
+- **`.develop-review-loop/` is gitignored upstream but not in target repos.**
+  Add it to your target repo's ignore policy so logs (which can contain
+  arbitrary review/dev-agent output) are not committed.
 
 ## Operational Notes
 

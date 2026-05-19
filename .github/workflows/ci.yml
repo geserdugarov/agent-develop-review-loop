@@ -1,0 +1,37 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  shellcheck:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - name: Run shellcheck
+        run: |
+          shellcheck \
+            develop-review-loop \
+            develop-review-loop-watch \
+            completions/develop-review-loop.bash \
+            tests/run.sh \
+            tests/_helpers.sh \
+            tests/test_*.sh
+
+  tests:
+    name: tests (bash)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+      - name: Run test suite
+        run: tests/run.sh
