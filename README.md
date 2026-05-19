@@ -1,5 +1,5 @@
-# agent-develop-review-loop
-Simple loop for development > review loop with HITL in the end.
+# Agent loop of develop and review
+Simple bash scripts for `development >> review` loop with HITL in the end
 
 ## Setup (one time)
 
