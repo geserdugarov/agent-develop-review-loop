@@ -519,3 +519,8 @@ runs later with `--manual-rerun`.
 - Inspect `summary.md` first after a run; then inspect the final `review-N.md`
   and corresponding logs if the run failed.
 - Use `develop-review-loop-watch` from another terminal to monitor long runs.
+
+## License
+
+Licensed under the Apache License, Version 2.0. See [LICENSE](../LICENSE) for
+the full text.

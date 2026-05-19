@@ -124,3 +124,8 @@ When resumed with `--manual-rerun`, the existing run directory is reused. If a C
 Cost estimates are derived from JSON usage metadata when agent logs expose it. Reported CLI costs are preferred; otherwise the script applies known first-party API token rates as a best-effort estimate. For Codex logs that omit the model name, the estimate falls back to `CODEX_MODEL` and then the configured Codex model in `$CODEX_HOME/config.toml` or `~/.codex/config.toml`. Subscription plans, third-party providers, regional pricing, long-context modes, priority processing, and separate tool fees can differ.
 
 See `docs/README.md` for the full project documentation and architecture notes.
+
+## License
+
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for the
+full text.
