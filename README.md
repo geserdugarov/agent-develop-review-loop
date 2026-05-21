@@ -1,4 +1,7 @@
 # Agent loop of develop and review
+
+[![CI](https://github.com/geserdugarov/agent-develop-review-loop/actions/workflows/ci.yml/badge.svg)](https://github.com/geserdugarov/agent-develop-review-loop/actions/workflows/ci.yml)
+
 Simple bash scripts for `development >> review` loop with HITL in the end
 
 ## Setup (one time)
