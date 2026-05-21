@@ -64,7 +64,9 @@ assert_fail "review_file_passed 2" "review_file_passed prose mention"
 # failing and no review-1 yet, the resume point is review-1.
 cp "$fail_md" "$ARTIFACTS/review-0.md"
 rm -f "$ARTIFACTS/review-1.md" "$ARTIFACTS/review-2.md"
+# shellcheck disable=SC2034  # infer_rerun_start_from_phases reads these globals.
 MAX=10
+# shellcheck disable=SC2034  # infer_rerun_start_from_phases reads these globals.
 ORIGINAL_START_STAGE="development"
 read -r stage iter < <(infer_rerun_start_from_phases)
 assert_eq "review" "$stage" "rerun infer stage"
@@ -90,11 +92,13 @@ assert_eq "development" "$(infer_original_start_stage "$ARTIFACTS")" "infer orig
 
 # infer_start_ref_from_run prefers run.env -> summary.md -> review log scan.
 printf 'START_REF=deadbeef\n' >"$metadata_file"
+# shellcheck disable=SC2034  # infer_start_ref_from_run reads this global.
 START_REF_OVERRIDE=""
 assert_eq "deadbeef" "$(infer_start_ref_from_run "$ARTIFACTS")" "infer start ref run.env"
 
 START_REF_OVERRIDE="abc1234"
 assert_eq "abc1234" "$(infer_start_ref_from_run "$ARTIFACTS")" "infer start ref override wins"
+# shellcheck disable=SC2034  # infer_start_ref_from_run reads this global.
 START_REF_OVERRIDE=""
 
 rm -f "$metadata_file"

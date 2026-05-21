@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2016  # Markdown backticks in printf strings are literal.
 set -euo pipefail
 
 # Bash reads script files incrementally. If this repository is edited while the
@@ -324,8 +325,8 @@ expand_tilde_path() {
   local path="$1"
 
   case "$path" in
-    "~") printf '%s' "$HOME" ;;
-    "~/"*) printf '%s/%s' "$HOME" "${path#'~/'}" ;;
+    \~) printf '%s' "$HOME" ;;
+    \~/*) printf '%s/%s' "$HOME" "${path#\~/}" ;;
     *) printf '%s' "$path" ;;
   esac
 }
