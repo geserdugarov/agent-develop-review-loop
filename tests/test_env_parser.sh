@@ -54,10 +54,12 @@ CONFIG_FILE="$envfile"
 unset DEV_AGENT
 assert_eq "claude"  "$(read_config_value DEV_AGENT fallback)"  "config: from .env"
 
+# shellcheck disable=SC2034  # read_config_value reads this global indirectly.
 DEV_AGENT=codex
 assert_eq "codex"   "$(read_config_value DEV_AGENT fallback)"  "config: exported wins"
 unset DEV_AGENT
 
+# shellcheck disable=SC2034  # read_config_value reads this global indirectly.
 CONFIG_FILE="$tmp/does-not-exist"
 assert_eq "fallback" "$(read_config_value DEV_AGENT fallback)" "config: default when no .env"
 

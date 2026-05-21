@@ -10,9 +10,9 @@ assert_eq "1,234"      "$(fmt_count 1234)"          "fmt_count thousand"
 assert_eq "1,234,567"  "$(fmt_count 1234567)"       "fmt_count million"
 
 assert_eq 'n/a'        "$(fmt_cost "")"             "fmt_cost empty"
-assert_eq '$1.23'      "$(fmt_cost 1.234 reported)" "fmt_cost reported"
-assert_eq '≈ $1.23'    "$(fmt_cost 1.234 estimated)" "fmt_cost estimated"
-assert_eq '≈ $0.00'    "$(fmt_cost 0 estimated)"    "fmt_cost zero estimated"
+assert_eq "\$1.23"      "$(fmt_cost 1.234 reported)" "fmt_cost reported"
+assert_eq "≈ \$1.23"    "$(fmt_cost 1.234 estimated)" "fmt_cost estimated"
+assert_eq "≈ \$0.00"    "$(fmt_cost 0 estimated)"    "fmt_cost zero estimated"
 
 assert_eq 'n/a'                       "$(fmt_models "")"                       "fmt_models empty"
 assert_eq 'claude-opus-4-7'           "$(fmt_models 'claude-opus-4-7')"        "fmt_models single"
@@ -35,6 +35,7 @@ assert_eq "12" "$(extract_iteration runs/review-12.log review)"               "e
 # expand_tilde_path uses HOME at call time.
 HOME="/home/user"
 assert_eq "/home/user"          "$(expand_tilde_path "~")"            "expand bare tilde"
+# shellcheck disable=SC2088  # This test intentionally passes a literal ~/ path.
 assert_eq "/home/user/runs"     "$(expand_tilde_path "~/runs")"       "expand tilde path"
 assert_eq "/abs/path"           "$(expand_tilde_path "/abs/path")"    "expand absolute pass-through"
 assert_eq "rel/path"            "$(expand_tilde_path "rel/path")"     "expand relative pass-through"
