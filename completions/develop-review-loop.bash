@@ -26,7 +26,9 @@ _develop_review_loop() {
     --rerun-run
     --rerun-from
     --start-ref
+    --version
     --help
+    -V
     -h
   "
 

@@ -2,6 +2,8 @@
 # shellcheck disable=SC2016  # Markdown backticks in printf strings are literal.
 set -euo pipefail
 
+DEVELOP_REVIEW_LOOP_VERSION="0.2.0"
+
 # Bash reads script files incrementally. If this repository is edited while the
 # loop is running, in-place rewrites can corrupt the parser's view of this file.
 # Run from a private copy when executed as a command; keep sourcing unchanged so
@@ -37,6 +39,7 @@ usage() {
   cat >&2 <<'EOF'
 Usage: develop-review-loop <task-file> [--max N] [--start-stage development|review]
        develop-review-loop --manual-rerun <run-dir> [--max N] [--rerun-from development-N|review-N]
+       develop-review-loop --version
 
   <task-file>   Path to a markdown/plain-text file describing the task.
                 Contents are passed verbatim to the development agent on iteration 0.
@@ -53,6 +56,7 @@ Usage: develop-review-loop <task-file> [--max N] [--start-stage development|revi
                 Override the inferred rerun stage for --manual-rerun.
   --start-ref <commit>
                 Override the inferred original start commit for --manual-rerun.
+  -V, --version Print version and exit.
 
 Project = $PWD (the target repo you cd into before running).
 Exit codes: 0 = review passed, 1 = max iterations hit without passing,
@@ -471,6 +475,7 @@ write_run_metadata() {
   local file="$1"
 
   {
+    printf 'TOOL_VERSION=%s\n' "$DEVELOP_REVIEW_LOOP_VERSION"
     printf 'START_REF=%s\n' "$START_REF"
     printf 'TASK_FILE=%s\n' "$TASK_FILE"
     printf 'START_STAGE=%s\n' "$ORIGINAL_START_STAGE"
@@ -486,6 +491,10 @@ write_run_metadata() {
     printf 'CLAUDE_MODEL=%s\n' "$CLAUDE_MODEL"
     printf 'CLAUDE_ARGS=%s\n' "$CLAUDE_ARGS"
   } >"$file"
+}
+
+print_version() {
+  printf 'develop-review-loop %s\n' "$DEVELOP_REVIEW_LOOP_VERSION"
 }
 
 infer_original_start_stage() {
@@ -1196,6 +1205,9 @@ while (( $# > 0 )); do
       START_REF_OVERRIDE="$2"; shift 2 ;;
     --start-ref=*)
       START_REF_OVERRIDE="${1#--start-ref=}"; shift ;;
+    -V|--version)
+      print_version
+      exit 0 ;;
     -h|--help)
       usage ;;
     --)
@@ -1483,6 +1495,7 @@ fi
 cat >"$ARTIFACTS/summary.md" <<EOF
 # develop-review-loop summary
 
+- Tool version: $DEVELOP_REVIEW_LOOP_VERSION
 - Task file: $TASK_FILE_SUMMARY
 - Iterations used: $review_num / $MAX
 - Verdict: $verdict
