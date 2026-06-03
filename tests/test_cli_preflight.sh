@@ -6,6 +6,7 @@ set -uo pipefail
 ROOT_DIR="${ROOT_DIR:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)}"
 TEST_NAME="$(basename "${BASH_SOURCE[0]}")"
 LOOP="$ROOT_DIR/develop-review-loop"
+WATCH="$ROOT_DIR/develop-review-loop-watch"
 _failures=0
 
 _fail() { printf '  FAIL [%s]: %s\n' "$TEST_NAME" "$*" >&2; _failures=$((_failures + 1)); }
@@ -19,6 +20,23 @@ expect_exit() {
     _fail "$label: expected exit $expected, got $actual (cmd: $*)"
   fi
 }
+
+expect_success_stdout() {
+  local expected="$1"; shift
+  local label="$1"; shift
+  local actual=0 output
+  output="$("$@" 2>/dev/null)" || actual=$?
+  if [[ "$actual" != 0 ]]; then
+    _fail "$label: expected exit 0, got $actual (cmd: $*)"
+  elif [[ "$output" != "$expected" ]]; then
+    _fail "$label: expected stdout [$expected], got [$output]"
+  fi
+}
+
+expect_success_stdout "develop-review-loop 0.2.0"       "main --version"  "$LOOP" --version
+expect_success_stdout "develop-review-loop 0.2.0"       "main -V"         "$LOOP" -V
+expect_success_stdout "develop-review-loop-watch 0.2.0" "watch --version" "$WATCH" --version
+expect_success_stdout "develop-review-loop-watch 0.2.0" "watch -V"        "$WATCH" -V
 
 if ! tmp="$(mktemp -d)" || [[ -z "$tmp" || ! -d "$tmp" ]]; then
   _fail "could not create temp dir"

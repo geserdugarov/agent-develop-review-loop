@@ -75,6 +75,7 @@ maintain the alias.
 ```bash
 develop-review-loop <task-file> [--max N] [--start-stage development|review]
 develop-review-loop --manual-rerun <run-dir> [--max N] [--rerun-from development-N|review-N]
+develop-review-loop --version
 ```
 
 Arguments and options:
@@ -90,6 +91,7 @@ Arguments and options:
   `--manual-rerun`.
 - `--start-ref <commit>`: override the original start commit for
   `--manual-rerun` when it cannot be recovered from run metadata or review logs.
+- `-V`, `--version`: print the tool version and exit.
 
 Exit codes:
 
@@ -104,6 +106,7 @@ on `git diff <start-ref>`.
 
 ```bash
 develop-review-loop-watch [interval-seconds] [tail-lines]
+develop-review-loop-watch --version
 ```
 
 This helper watches the current repository's `.develop-review-loop/latest`
@@ -115,6 +118,21 @@ development-N.log -> development-N.md -> review-N.log -> review-N.md
 ```
 
 It requires the system `watch` command.
+
+Use `develop-review-loop-watch --version` to print the helper version without
+requiring `watch` or an existing run directory.
+
+## Versioning
+
+Current version: `0.2.0`.
+
+Use `develop-review-loop --version` and `develop-review-loop-watch --version`
+to check the installed scripts. New run artifacts record the same version as
+`TOOL_VERSION` in `run.env` and as `Tool version` in `summary.md`.
+
+For this Bash-only project, release history should be monitored with Git tags
+such as `v0.2.0`. The script constants provide runtime reporting, while tags
+provide immutable release points.
 
 ## Runtime Architecture
 
@@ -368,8 +386,8 @@ Generated files:
 | `review-N.md` | Final review text and sentinel for iteration `N`. Fed back into the next development stage when review fails. |
 | `phases.tsv` | Tab-separated timing metadata: stage, iteration, agent, log path, duration seconds. |
 | `task.md` | Saved task text for future reruns that need to replay `development-0`. |
-| `run.env` | Original start ref and run metadata used by manual reruns. |
-| `summary.md` | Final verdict, metadata, final review paths, and usage/cost estimate tables. |
+| `run.env` | Tool version, original start ref, and run metadata used by manual reruns. |
+| `summary.md` | Tool version, final verdict, metadata, final review paths, and usage/cost estimate tables. |
 
 Retention cleanup happens after summary generation. The current run counts toward
 `DEVELOP_REVIEW_LOOP_KEEP_RUNS`.
