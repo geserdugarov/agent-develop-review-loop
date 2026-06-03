@@ -76,11 +76,14 @@ develop-review-loop --manual-rerun .develop-review-loop/run-YYYYMMDD-HHMMSS-PID 
 
 Optional runtime configuration is read from `./.env` in the target repo. Copy this repo's `.env.example` to the target repo as a starting point.
 
-- `DEV_AGENT`: development/fix-stage agent. Supported values: `claude`, `codex`. Defaults to `claude`.
-- `REVIEW_AGENT`: review-stage agent. Supported values: `claude`, `codex`. Defaults to `codex`.
+- `DEV_AGENT`: development/fix-stage agent. Supported values: `claude`, `codex`. Defaults to `claude`. Extra stage-specific CLI flags may follow the agent name, for example `DEV_AGENT="claude --model claude-opus-4-7 --effort xhigh"`.
+- `REVIEW_AGENT`: review-stage agent. Supported values: `claude`, `codex`. Defaults to `codex`. Extra stage-specific CLI flags may follow the agent name.
 - `CODEX_BIN`: path to the Codex CLI. Defaults to `codex`.
 - `CODEX_MODEL`: optional model passed to `codex exec -m`. When unset, Codex uses its own default/configured model; the usage summary will still try to read that configured model from `$CODEX_HOME/config.toml` or `~/.codex/config.toml` if JSON logs omit it.
+- `CODEX_ARGS`: optional extra Codex flags used for every Codex stage, for example `-c 'model_reasoning_effort="xhigh"'`.
 - `CLAUDE_BIN`: path to the Claude CLI. Defaults to `claude`.
+- `CLAUDE_MODEL`: optional model passed as `claude --model "$CLAUDE_MODEL"`. When unset, Claude uses its own default/configured model.
+- `CLAUDE_ARGS`: optional extra Claude flags used for every Claude stage, for example `--effort xhigh`.
 - `DEVELOP_REVIEW_LOOP_KEEP_RUNS`: number of `.develop-review-loop/run-*` artifact directories to keep, including the current run. Defaults to `3`.
 
 `jq` is a command-line JSON processor. It is optional but recommended. When present, the loop can parse JSONL usage metadata for the final cost tables and can capture Claude review runs as structured logs. Without `jq`, the loop still runs, but unsupported usage fields are reported as `n/a`.
@@ -99,8 +102,19 @@ CODEX_BIN=codex
 # Optional explicit Codex model. Leave empty to use Codex's own default/config.
 # CODEX_MODEL=gpt-5.5
 
+# Optional extra Codex flags.
+# CODEX_ARGS=-c 'model_reasoning_effort="xhigh"'
+
 # Path to the claude CLI. Override only if not on $PATH.
 CLAUDE_BIN=claude
+
+# Optional explicit Claude model and extra flags.
+# CLAUDE_MODEL=claude-opus-4-7
+# CLAUDE_ARGS="--effort xhigh"
+
+# Or use stage-specific inline flags.
+# DEV_AGENT="claude --model claude-opus-4-7 --effort xhigh"
+# REVIEW_AGENT=codex -m gpt-5.5 -c 'model_reasoning_effort="xhigh"'
 ```
 
 ### Watching progress

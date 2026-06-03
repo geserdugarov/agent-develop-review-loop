@@ -10,6 +10,8 @@ cat >"$envfile" <<'EOF'
 # comment line
 DEV_AGENT=claude
 REVIEW_AGENT="codex"
+CODEX_ARGS=-c 'model_reasoning_effort="xhigh"'
+CODEX_REVIEW_AGENT=codex -m gpt-5.5 -c 'model_reasoning_effort="xhigh"'
   export QUOTED_SINGLE='value with spaces'
 WITH_TRAILING=foo   # inline comment
 MULTI_HASH=claude # local # default
@@ -33,6 +35,10 @@ assert_eq '"abc'  "$(strip_wrapping_quotes '"abc')"          "strip unbalanced l
 
 assert_eq "claude"            "$(read_env_value DEV_AGENT "$envfile")"             "DEV_AGENT plain"
 assert_eq "codex"             "$(read_env_value REVIEW_AGENT "$envfile")"          "REVIEW_AGENT double quoted"
+assert_eq "-c 'model_reasoning_effort=\"xhigh\"'" \
+                              "$(read_env_value CODEX_ARGS "$envfile")"            "CODEX_ARGS preserves quoted config"
+assert_eq "codex -m gpt-5.5 -c 'model_reasoning_effort=\"xhigh\"'" \
+                              "$(read_env_value CODEX_REVIEW_AGENT "$envfile")"    "Codex inline args preserve quoted config"
 assert_eq "value with spaces" "$(read_env_value QUOTED_SINGLE "$envfile")"         "QUOTED_SINGLE export+quoted"
 assert_eq "foo"               "$(read_env_value WITH_TRAILING "$envfile")"         "WITH_TRAILING inline comment stripped"
 assert_eq "claude"            "$(read_env_value MULTI_HASH "$envfile")"            "Inline comment splits at first whitespace-#"

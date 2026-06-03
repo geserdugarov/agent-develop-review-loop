@@ -267,6 +267,15 @@ Configured invocations:
 - Codex: `codex exec -s workspace-write --json --output-last-message development-N.md`
 
 If `CODEX_MODEL` is set, Codex invocations include `-m "$CODEX_MODEL"`.
+If `CODEX_ARGS` is set, its shell-style whitespace-separated flags are added to
+every Codex invocation. Additional Codex flags can also be placed after the
+stage agent name, for example
+`REVIEW_AGENT=codex -m gpt-5.5 -c 'model_reasoning_effort="xhigh"'`.
+If `CLAUDE_MODEL` is set, Claude invocations include
+`--model "$CLAUDE_MODEL"`. If `CLAUDE_ARGS` is set, its shell-style
+whitespace-separated flags are added to every Claude invocation. Additional
+flags can also be placed after the stage agent name, for example
+`DEV_AGENT="claude --model claude-opus-4-7 --effort xhigh"`.
 
 Development output is captured in `development-N.log`; the final development
 message is saved in `development-N.md`.
@@ -318,11 +327,14 @@ Supported variables:
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `DEV_AGENT` | `claude` | Agent for implementation and fix stages. Supported values: `claude`, `codex`. |
-| `REVIEW_AGENT` | `codex` | Agent for review stages. Supported values: `claude`, `codex`. |
+| `DEV_AGENT` | `claude` | Agent for implementation and fix stages. Supported values: `claude`, `codex`. Extra stage-specific CLI flags may follow the agent name, for example `DEV_AGENT="claude --model claude-opus-4-7 --effort xhigh"`. |
+| `REVIEW_AGENT` | `codex` | Agent for review stages. Supported values: `claude`, `codex`. Extra stage-specific CLI flags may follow the agent name. |
 | `CODEX_BIN` | `codex` | Codex CLI executable or path. |
 | `CODEX_MODEL` | empty | Optional model passed to `codex exec -m`. Also used as a usage-summary fallback when logs omit the model. |
+| `CODEX_ARGS` | empty | Optional extra Codex flags used for every Codex stage, for example `-c 'model_reasoning_effort="xhigh"'`. |
 | `CLAUDE_BIN` | `claude` | Claude CLI executable or path. |
+| `CLAUDE_MODEL` | empty | Optional model passed as `claude --model "$CLAUDE_MODEL"`. |
+| `CLAUDE_ARGS` | empty | Optional extra Claude flags used for every Claude stage, for example `--effort xhigh`. |
 | `DEVELOP_REVIEW_LOOP_KEEP_RUNS` | `3` | Number of `.develop-review-loop/run-*` directories to retain, including the current run. |
 
 Configuration parsing supports plain `KEY=value` lines, optional `export`,
@@ -482,8 +494,8 @@ instead of executed, so no side effects run during tests. Tests rely only on
 `bash`, `awk`, `grep`, `git`, `mktemp`, and (for `tests/test_cli_preflight.sh`)
 the ability to `git init` in `mktemp`-created directories.
 
-GitHub Actions runs the same suite plus `shellcheck --severity=warning` on
-pull requests and on pushes to `main`. See `.github/workflows/ci.yml`.
+GitHub Actions runs the same suite plus `shellcheck` on pull requests and on
+pushes to `main`. See `.github/workflows/ci.yml`.
 
 ## Security Notes
 
@@ -500,8 +512,9 @@ working tree. A few specifics are worth calling out:
   restricted by its own sandbox. The dev stage runs with
   `-s workspace-write`, which limits Codex to the current workspace.
 - **`.env` is read from the target repo, not this tool repo.** Values like
-  `CLAUDE_BIN`, `CODEX_BIN`, and `CODEX_MODEL` are read from the target's
-  `./.env` and used as executable paths or as a model name passed to the CLI.
+  `CLAUDE_BIN`, `CODEX_BIN`, `CODEX_MODEL`, `CODEX_ARGS`, `CLAUDE_MODEL`,
+  `CLAUDE_ARGS`, and inline `DEV_AGENT` or `REVIEW_AGENT` flags are read from
+  the target's `./.env` and used as executable paths, model names, or CLI flags.
   Treat target repositories the same way you treat their shell `PATH`: if you
   cd into an untrusted repo, do not run `develop-review-loop` there without
   first inspecting `.env`. The parser only recognizes a fixed list of keys
