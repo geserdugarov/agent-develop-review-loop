@@ -6,6 +6,12 @@ Simple bash scripts for a `development >> review` loop with HITL at the end.
 
 ## Setup
 
+Install and authenticate the agent CLIs first. The default configuration uses
+`claude` as the development agent and `codex` as the review agent, so both
+commands must be available on `$PATH` before running the loop. To use different
+paths or roles, copy [`.env.example`](.env.example) into the target repository
+as `.env` and set `CLAUDE_BIN`, `CODEX_BIN`, `DEV_AGENT`, or `REVIEW_AGENT`.
+
 Link the scripts into `~/bin` (make sure `~/bin` is on `$PATH`):
 
 ```bash

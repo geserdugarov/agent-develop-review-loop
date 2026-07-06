@@ -23,6 +23,12 @@ Supported agents for either role:
 
 ## Setup
 
+Install and authenticate the agent CLIs before using the loop. By default the
+development stage runs `claude` and the review stage runs `codex`, so both
+commands must be available on `$PATH`. If a command lives elsewhere, or if you
+want to swap roles, set `CLAUDE_BIN`, `CODEX_BIN`, `DEV_AGENT`, or
+`REVIEW_AGENT` in the target repository's `.env` file.
+
 Create stable command links in `~/bin`:
 
 ```bash
